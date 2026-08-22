@@ -1,0 +1,17 @@
+.env
+.agents/
+.claude/
+.git/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+data/
+static/
+*.md
+.pre-commit-config.yaml
+.github/
+scripts/
+tests/
+docs/

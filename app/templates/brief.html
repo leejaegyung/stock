@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>📈 아침 브리핑 — {{ date }}</title>
+  <style>
+    :root {
+      --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
+      --text: #e2e8f0; --muted: #94a3b8; --accent: #6366f1;
+      --green: #22c55e; --red: #ef4444; --yellow: #eab308; --blue: #3b82f6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif;
+           line-height: 1.6; padding: 2rem 1rem; }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+    h2 { font-size: 1.2rem; font-weight: 600; color: var(--accent);
+         border-bottom: 1px solid var(--border); padding-bottom: 0.4rem;
+         margin: 2rem 0 1rem; }
+    h3 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.5rem; }
+    .meta { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
+    .card { background: var(--surface); border: 1px solid var(--border);
+            border-radius: 12px; padding: 1.2rem 1.5rem; margin-bottom: 1rem; }
+    .verdict { display: inline-block; font-weight: 700; font-size: 1rem;
+               padding: 0.2rem 0.7rem; border-radius: 6px; margin-right: 0.5rem; }
+    .verdict-매수, .verdict-추가매수 { background: #14532d; color: var(--green); }
+    .verdict-보유 { background: #713f12; color: var(--yellow); }
+    .verdict-매도 { background: #7f1d1d; color: var(--red); }
+    .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+          gap: 0.5rem; margin: 0.8rem 0; }
+    .kv-item { background: var(--bg); border: 1px solid var(--border);
+               border-radius: 8px; padding: 0.6rem 0.8rem; }
+    .kv-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase;
+                letter-spacing: 0.05em; }
+    .kv-value { font-size: 0.95rem; font-weight: 600; }
+    .warning { background: #451a03; border-left: 3px solid var(--yellow);
+               border-radius: 0 8px 8px 0; padding: 0.4rem 0.8rem;
+               font-size: 0.85rem; margin: 0.3rem 0; }
+    ul { list-style: none; padding: 0; }
+    li { padding: 0.2rem 0; font-size: 0.9rem; }
+    li::before { content: "•"; color: var(--accent); margin-right: 0.5rem; }
+    .reflection { font-size: 0.82rem; color: var(--muted); font-style: italic;
+                  border-top: 1px solid var(--border); margin-top: 0.8rem;
+                  padding-top: 0.6rem; }
+    .disclaimer { color: var(--muted); font-size: 0.78rem; margin-top: 3rem;
+                  border-top: 1px solid var(--border); padding-top: 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { background: var(--surface); padding: 0.5rem 0.8rem; text-align: left;
+         color: var(--muted); font-weight: 600; }
+    td { padding: 0.4rem 0.8rem; border-bottom: 1px solid var(--border); }
+    a.refresh { display: inline-block; margin-top: 0.5rem; color: var(--accent);
+                font-size: 0.82rem; text-decoration: none; }
+    a.refresh:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>📈 아침 브리핑</h1>
+  <p class="meta">{{ date }} &nbsp;|&nbsp; {{ stock_count }}개 종목 분석
+    <a class="refresh" href="/">↻ 새로고침</a>
+  </p>
+
+  <!-- 시장 섹션 -->
+  <h2>🌍 오늘의 시장</h2>
+  <div class="card">
+    <div class="kv">
+      {% for k, v in macro_kv.items() %}
+      <div class="kv-item">
+        <div class="kv-label">{{ k }}</div>
+        <div class="kv-value">{{ v }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- 종목별 섹션 -->
+  <h2>📊 보유 종목별 브리핑</h2>
+  {% for stock in stocks %}
+  <div class="card">
+    <h3>{{ stock.ticker }} [{{ stock.market }}] &nbsp;
+      <span class="verdict verdict-{{ stock.verdict }}">{{ stock.verdict_emoji }}{{ stock.verdict }}</span>
+      <small style="color:var(--muted)">확신도 {{ stock.confidence }}</small>
+    </h3>
+
+    <div class="kv">
+      <div class="kv-item"><div class="kv-label">기대값 (EV)</div>
+        <div class="kv-value">{{ stock.ev }}</div></div>
+      <div class="kv-item"><div class="kv-label">켈리 권장비중</div>
+        <div class="kv-value">{{ stock.half_kelly }}</div></div>
+      <div class="kv-item"><div class="kv-label">밸류에이션</div>
+        <div class="kv-value">{{ stock.valuation }}</div></div>
+      <div class="kv-item"><div class="kv-label">현금흐름 패턴</div>
+        <div class="kv-value">{{ stock.cashflow_pattern }}</div></div>
+    </div>
+
+    <ul>
+      {% for r in stock.key_reasons %}<li>{{ r }}</li>{% endfor %}
+    </ul>
+
+    {% if stock.warnings %}
+    {% for w in stock.warnings %}
+    <div class="warning">⚠️ {{ w }}</div>
+    {% endfor %}
+    {% endif %}
+
+    <div class="reflection">🔍 Reflection: {{ stock.reflection_note }}</div>
+  </div>
+  {% endfor %}
+
+  {% if not stocks %}
+  <p style="color:var(--muted)">관심종목 분석 결과가 없습니다.
+    CLI에서 <code>python -m app.entrypoints.cli brief</code>를 실행하세요.</p>
+  {% endif %}
+
+  <p class="disclaimer">
+    본 브리핑은 정보 제공·분석 보조 목적이며 투자 자문이 아닙니다.
+    모든 수치는 가정에 근거한 추정치이며 최종 투자 판단과 책임은 사용자에게 있습니다.
+  </p>
+</div>
+</body>
+</html>

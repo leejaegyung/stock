@@ -1,0 +1,38 @@
+# 환경 변수 / 시크릿
+.env
+*.env
+
+# 데이터베이스
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 렌더 결과물
+static/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# 테스트 캐시
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Claude / 에이전트
+.claude/
+.agents/
+skills-lock.json
+
+# macOS
+.DS_Store
