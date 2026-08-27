@@ -330,10 +330,34 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
 
 /* ══ 포트폴리오 분석 ══ */
 .pa-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
-.pa-stat{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
-.pa-stat .k{font-size:11px;color:var(--mute)}
-.pa-stat .v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px;letter-spacing:-.02em}
-.pa-stat .s{font-size:10px;color:var(--mute);margin-top:1px}
+.pa-stat{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:9px 11px}
+.pa-stat .k{font-size:11px;color:var(--sub);font-weight:500}
+.pa-stat .v{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:3px;letter-spacing:-.02em;color:var(--ink)}
+.pa-stat .s{font-size:10.5px;color:var(--mute);margin-top:3px;line-height:1.4}
+/* 판정 배지 */
+.vd{display:inline-flex;align-items:center;font-size:10px;font-weight:700;padding:1px 6px;border-radius:6px;margin-top:4px}
+.vd-good{color:var(--up);background:var(--up-a10)}
+.vd-mid{color:var(--sub);background:var(--chip)}
+.vd-warn{color:var(--warn);background:var(--warn-a12)}
+.vd-bad{color:var(--accent-strong);background:var(--accent-a10)}
+.vd-info{color:var(--accent);background:var(--accent-soft)}
+/* 한눈에 보기 */
+.pa-summary{background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:12px;padding:11px 13px;margin-bottom:12px}
+.pa-summary .t{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:6px}
+.pa-summary li{font-size:12px;color:var(--ink-2);line-height:1.6;list-style:none;display:flex;gap:6px;margin-bottom:3px}
+.pa-summary li .ic{flex-shrink:0}
+.pa-h{margin-top:16px;font-size:13px;font-weight:700;color:var(--ink)}
+.pa-hint{font-size:11px;color:var(--sub);line-height:1.55;margin-top:2px}
+/* 용어 가이드 */
+.pa-guide{margin-top:16px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.pa-guide summary{padding:10px 12px;font-size:12.5px;font-weight:600;color:var(--sub);cursor:pointer;list-style:none;background:var(--card-2)}
+.pa-guide summary::-webkit-details-marker{display:none}
+.pa-guide summary::before{content:'📖 ';}
+.pa-guide[open] summary{border-bottom:1px solid var(--line)}
+.pa-guide .g-row{padding:9px 12px;border-bottom:1px solid var(--line);font-size:11.5px;line-height:1.6}
+.pa-guide .g-row:last-child{border-bottom:none}
+.pa-guide .g-row b{color:var(--ink)}
+.pa-guide .g-row .good{color:var(--up);font-weight:600}
 .heat{border-collapse:collapse;font-size:11px}
 .heat th,.heat td{padding:4px 7px;text-align:center;font-variant-numeric:tabular-nums;border:1px solid var(--line)}
 .heat th{color:var(--mute);font-weight:500}
@@ -743,26 +767,26 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
     </div>
   </div>
 
-  <!-- 포트폴리오 계량 분석 (gs-quant 스타일) -->
+  <!-- 포트폴리오 분석 -->
   <div class="box" id="pa-box">
     <div class="box-head">
-      <span class="box-title">포트폴리오 분석</span>
-      <span class="box-sub" id="pa-meta">위험 · 분산 · 비중 최적화</span>
+      <span class="box-title">내 포트폴리오는 얼마나 튼튼할까?</span>
+      <span class="box-sub" id="pa-meta"></span>
       <button class="btn btn-link" onclick="loadAnalytics(true)">새로고침</button>
     </div>
     <div id="pa-body" class="box-body">
-      <div style="font-size:12px;color:var(--mute)"><span class="spin"></span> 시계열 분석 중…</div>
+      <div style="font-size:12px;color:var(--mute)"><span class="spin"></span> 최근 1년 시세로 분석 중…</div>
     </div>
   </div>
 
   <div class="box" id="bt-box">
     <div class="box-head">
-      <span class="box-title">전략 백테스트</span>
-      <span class="box-sub" id="bt-meta">1년 · 63일 룩백 · 21일 리밸런싱</span>
-      <button class="btn btn-primary btn-sm" id="bt-run" onclick="runBacktest()">백테스트 실행</button>
+      <span class="box-title">1년 전에 이렇게 투자했다면?</span>
+      <span class="box-sub" id="bt-meta"></span>
+      <button class="btn btn-primary btn-sm" id="bt-run" onclick="runBacktest()">시뮬레이션 실행</button>
     </div>
     <div id="bt-body" class="box-body">
-      <div style="font-size:12px;color:var(--mute)">동일 비중·역변동성·리스크 패리티·최소 분산 전략을 현재 보유 종목으로 리밸런싱 시뮬레이션합니다.</div>
+      <div style="font-size:12px;color:var(--sub);line-height:1.6">보유 종목을 <b>똑같이 / 위험 균등하게 / 출렁임 최소로</b> 나눠 담았을 때, 지난 1년 성과가 어떻게 달랐을지 시장(S&amp;P 500)과 비교합니다.</div>
     </div>
   </div>
 </div>
@@ -1975,70 +1999,192 @@ async function loadAnalytics(force){
     renderAnalytics(d);
   } catch(e){ el.innerHTML = `<div style="font-size:12px;color:var(--up)">분석 실패: ${esc(e.message)}</div>`; }
 }
-function renderAnalytics(d){
-  const c = d.current, N = d.labels.length;
-  document.getElementById('pa-meta').textContent = `벤치 ${d.benchmark} · ${d.observations}거래일 · 무위험 ${pct1(d.rf_annual)}`;
-  const stats = [
-    ['연율 변동성', pct1(c.volatility), '', ''],
-    ['샤프 지수', c.sharpe.toFixed(2), c.sharpe >= 1 ? 'var(--up)' : 'var(--ink)', ''],
-    ['소르티노', c.sortino.toFixed(2), '', ''],
-    ['최대 낙폭', pct1(c.max_drawdown), 'var(--accent-strong)', ''],
-    ['VaR 95% (1일)', pct2(c.var_95), 'var(--accent-strong)', `CVaR ${pct2(c.cvar_95)}`],
-    ['포트폴리오 β', d.portfolio_beta.toFixed(2), '', `vs ${d.benchmark}`],
-    ['분산 비율', c.diversification_ratio.toFixed(2), c.diversification_ratio >= 1.3 ? 'var(--up)' : 'var(--warn)', '1이면 효과 없음'],
-    ['유효 종목수', c.effective_holdings.toFixed(1), c.effective_holdings < N * 0.6 ? 'var(--warn)' : 'var(--ink)', `보유 ${N}종목`],
-  ];
-  const statHtml = `<div class="pa-stats">${stats.map(([k,v,col,s]) =>
-    `<div class="pa-stat"><div class="k">${k}</div><div class="v"${col ? ` style="color:${col}"` : ''}>${v}</div>${s ? `<div class="s">${esc(s)}</div>` : ''}</div>`).join('')}</div>`;
+// 지표별 쉬운 이름 · 설명 · 좋고 나쁨 판정
+const PA_METRICS = {
+  volatility: {
+    name: '가격 출렁임 (연)',
+    tip: '1년간 평가금액이 오르내린 폭. 낮을수록 마음이 편합니다.',
+    fmt: v => pct1(v),
+    judge: v => v < 0.12 ? ['안정적','good'] : v < 0.20 ? ['보통','mid'] : v < 0.30 ? ['다소 큼','warn'] : ['매우 큼','bad'],
+  },
+  sharpe: {
+    name: '위험 대비 수익 효율',
+    tip: '감수한 위험 1만큼당 얼마를 벌었는지. 1을 넘으면 잘한 것, 2 이상이면 매우 우수.',
+    fmt: v => v.toFixed(2),
+    judge: v => v >= 2 ? ['매우 우수','good'] : v >= 1 ? ['우수','good'] : v >= 0.5 ? ['보통','mid'] : v >= 0 ? ['아쉬움','warn'] : ['손실','bad'],
+  },
+  sortino: {
+    name: '손실 위험 대비 효율',
+    tip: '샤프와 비슷하지만 "손실 쪽 흔들림"만으로 계산해, 실제 체감에 더 가깝습니다.',
+    fmt: v => v.toFixed(2),
+    judge: v => v >= 2.5 ? ['매우 우수','good'] : v >= 1.3 ? ['우수','good'] : v >= 0.7 ? ['보통','mid'] : ['아쉬움','warn'],
+  },
+  max_drawdown: {
+    name: '역대 최대 하락폭',
+    tip: '이 기간 고점 대비 가장 크게 빠졌던 낙폭. 이 정도 하락은 견딜 수 있어야 합니다.',
+    fmt: v => pct1(v),
+    judge: v => v > -0.10 ? ['견딜 만함','good'] : v > -0.20 ? ['보통','mid'] : v > -0.35 ? ['큼','warn'] : ['매우 큼','bad'],
+  },
+  var_95: {
+    name: '하루 예상 최대 손실',
+    tip: '평범한 날 기준, 100일 중 95일은 손실이 이보다 작습니다 (하루 단위).',
+    fmt: v => pct2(v),
+    judge: v => v < 0.015 ? ['작음','good'] : v < 0.03 ? ['보통','mid'] : ['큼','warn'],
+  },
+  beta: {
+    name: '시장 따라가는 정도',
+    tip: '시장(S&P 500)이 1% 움직일 때 내 포트폴리오는 몇 %? 1이면 시장과 똑같이, 낮으면 방어적.',
+    fmt: v => v.toFixed(2),
+    judge: v => v < 0 ? ['시장과 반대','info'] : v < 0.7 ? ['방어적','good'] : v <= 1.1 ? ['시장과 비슷','mid'] : ['공격적','warn'],
+  },
+  diversification_ratio: {
+    name: '분산투자 효과',
+    tip: '나눠 담아서 위험이 얼마나 줄었나. 1이면 효과 없음, 1.3을 넘으면 잘 분산된 편.',
+    fmt: v => v.toFixed(2) + '배',
+    judge: v => v >= 1.5 ? ['효과 큼','good'] : v >= 1.25 ? ['양호','mid'] : v >= 1.1 ? ['약함','warn'] : ['거의 없음','bad'],
+  },
+  effective_holdings: {
+    name: '실질 분산 종목 수',
+    tip: '비중까지 감안한 "진짜" 분산 종목 수. 보유 종목 수에 가까울수록 골고루 담은 것.',
+    fmt: (v, ctx) => v.toFixed(1) + ` / ${ctx.N}`,
+    judge: (v, ctx) => v >= ctx.N * 0.8 ? ['골고루','good'] : v >= ctx.N * 0.6 ? ['보통','mid'] : ['한쪽 집중','warn'],
+  },
+};
 
-  // 종목별 위험
-  const paTbl = `<div class="tbl-scroll" style="margin-top:12px"><table class="data-table" style="min-width:520px">
-    <thead><tr><th>종목</th><th class="num">비중</th><th class="num">변동성</th><th class="num">β</th><th class="num">위험기여</th><th class="num">벤치 상관</th><th class="num">최대낙폭</th></tr></thead>
+function paStatCard(key, rawVal, ctx){
+  const m = PA_METRICS[key];
+  const [vd, tone] = m.judge(rawVal, ctx);
+  return `<div class="pa-stat">
+    <div class="k">${m.name}</div>
+    <div class="v">${m.fmt(rawVal, ctx)}</div>
+    <span class="vd vd-${tone}">${vd}</span>
+    <div class="s">${m.tip}</div>
+  </div>`;
+}
+
+function paNarrative(d){
+  const c = d.current, N = d.labels.length, bm = d.benchmark_metrics || {};
+  const li = [];
+  // 1) 시장과 비교한 출렁임
+  if (bm.volatility != null){
+    const less = c.volatility < bm.volatility;
+    li.push(['📊', `가격 출렁임은 연 <b>${pct1(c.volatility)}</b>로, 시장(${d.benchmark} ${pct1(bm.volatility)})보다 ${less ? '<b>덜</b> 흔들렸습니다' : '<b>더</b> 흔들렸습니다'}.`]);
+  } else {
+    li.push(['📊', `가격 출렁임은 연 <b>${pct1(c.volatility)}</b>입니다.`]);
+  }
+  // 2) 수익 효율
+  const sj = c.sharpe >= 1.5 ? '매우 잘' : c.sharpe >= 1 ? '잘' : c.sharpe >= 0.5 ? '무난하게' : '아쉽게';
+  li.push(['💰', `위험을 감수한 것에 비해 <b>${sj}</b> 벌었습니다 (효율 지표 ${c.sharpe.toFixed(2)}).`]);
+  // 3) 최대 하락
+  li.push(['📉', `가장 힘들었던 구간에 고점 대비 <b>${pct1(c.max_drawdown)}</b> 떨어진 적이 있습니다.`]);
+  // 4) 집중도 경고
+  const top = d.per_asset.slice().sort((a,b) => b.weight - a.weight)[0];
+  if (top && (top.weight > 0.4 || c.effective_holdings < N * 0.6)){
+    li.push(['⚠️', `<b>${esc(top.ticker)}</b> 한 종목에 <b>${pct1(top.weight)}</b>가 몰려 있어, 이 종목이 흔들리면 전체가 크게 출렁일 수 있습니다.`]);
+  }
+  // 5) 개선 제안
+  const better = ['equal','risk_parity','min_variance']
+    .map(k => d.schemes[k]).filter(Boolean)
+    .filter(s => s.sharpe > c.sharpe + 0.1 || (s.volatility < c.volatility * 0.9 && s.sharpe >= c.sharpe - 0.05))
+    .sort((a,b) => b.sharpe - a.sharpe)[0];
+  if (better){
+    li.push(['💡', `<b>'${esc(better.name)}'</b> 방식으로 비중을 나눠 담으면 위험은 ${better.volatility < c.volatility ? '낮추면서 ' : ''}수익 효율을 <b>${better.sharpe.toFixed(2)}</b>까지 올릴 수 있습니다 (아래 표 참고).`]);
+  } else {
+    li.push(['✅', `현재 비중이 다른 분산 방식보다 크게 뒤처지지 않습니다.`]);
+  }
+  return `<div class="pa-summary">
+    <div class="t">한눈에 보기</div>
+    <ul style="margin:0;padding:0">${li.map(([ic,t]) => `<li><span class="ic">${ic}</span><span>${t}</span></li>`).join('')}</ul>
+  </div>`;
+}
+
+const PA_GUIDE = [
+  ['가격 출렁임(변동성)', '1년간 평가금액이 위아래로 흔들린 폭. 예금은 0%, 개별 주식은 보통 25~40%.', '주식형 포트폴리오는 <span class="good">15% 이하면 안정적</span>'],
+  ['위험 대비 수익 효율(샤프)', '"이만큼 마음 졸인 값어치를 했나?"를 숫자로. 은행 이자보다 얼마나 더 벌었는지를 위험으로 나눈 값.', '<span class="good">1 이상이면 우수, 2 이상이면 매우 우수</span>, 0 미만이면 손실'],
+  ['손실 위험 대비 효율(소르티노)', '샤프와 목적은 같지만, 오를 때의 흔들림은 빼고 "떨어질 때"만 위험으로 봅니다.', '<span class="good">1.3 이상이면 우수</span>'],
+  ['역대 최대 하락폭(MDD)', '이 기간 중 최고점에서 최저점까지 몇 % 빠졌었나. 실제로 겪게 될 최악의 손실 감각.', '<span class="good">-10% 이내면 견딜 만함</span>, -30% 넘으면 큰 각오 필요'],
+  ['하루 예상 최대 손실(VaR 95%)', '평범한 하루 기준, 20일 중 19일은 손실이 이보다 작다는 뜻.', '작을수록 안전'],
+  ['시장 따라가는 정도(베타)', '시장이 1% 움직일 때 내 포트폴리오는? 1이면 똑같이, 0.5면 절반만, 마이너스면 반대로.', '방어형은 0.7 미만, 공격형은 1.2 이상'],
+  ['분산투자 효과', '여러 종목에 나눠 담아 위험이 몇 배 줄었는지. 다 같이 움직이는 종목만 담으면 1배(효과 없음).', '<span class="good">1.3배 이상이면 분산이 잘 됨</span>'],
+  ['실질 분산 종목 수', '3종목을 담아도 한 종목이 90%면 "사실상 1종목". 비중까지 반영한 진짜 종목 수.', '보유 종목 수에 가까울수록 좋음'],
+  ['상관관계', '두 종목이 함께 움직이는 정도. +1은 완전히 같이, 0은 무관, -1은 정반대.', '<span class="good">낮을수록(0에 가까울수록) 분산 효과가 큼</span>'],
+];
+
+function renderAnalytics(d){
+  const c = d.current, N = d.labels.length, ctx = { N };
+  document.getElementById('pa-meta').textContent = `최근 ${d.observations}거래일 · 비교 기준 ${d.benchmark}`;
+
+  const cards = [
+    paStatCard('volatility', c.volatility, ctx),
+    paStatCard('sharpe', c.sharpe, ctx),
+    paStatCard('sortino', c.sortino, ctx),
+    paStatCard('max_drawdown', c.max_drawdown, ctx),
+    paStatCard('var_95', c.var_95, ctx),
+    paStatCard('beta', d.portfolio_beta, ctx),
+    paStatCard('diversification_ratio', c.diversification_ratio, ctx),
+    paStatCard('effective_holdings', c.effective_holdings, ctx),
+  ];
+  const statHtml = paNarrative(d) + `<div class="pa-stats">${cards.join('')}</div>`;
+
+  // 종목별 위험 기여
+  const paTbl = `<div class="pa-h">종목별 위험 분해</div>
+  <div class="pa-hint">'위험기여'가 '비중'보다 크면, 그 종목이 비중보다 더 많이 전체를 흔들고 있다는 뜻입니다.</div>
+  <div class="tbl-scroll" style="margin-top:6px"><table class="data-table" style="min-width:480px">
+    <thead><tr><th>종목</th><th class="num">비중</th><th class="num">위험기여</th><th class="num">출렁임</th><th class="num">시장 민감도</th></tr></thead>
     <tbody>${d.per_asset.map(a => {
       const rc = c.risk_contributions[a.ticker];
+      const hot = rc > a.weight + 0.05;
       return `<tr>
         <td style="font-weight:600">${esc(a.ticker)}</td>
         <td class="num">${pct1(a.weight)}</td>
-        <td class="num">${pct1(a.volatility)}</td>
-        <td class="num">${a.beta.toFixed(2)}</td>
-        <td class="num" style="color:${rc > a.weight + 0.05 ? 'var(--up)' : 'var(--sub)'}">${pct1(rc)}</td>
-        <td class="num" style="color:var(--sub)">${a.corr_benchmark.toFixed(2)}</td>
-        <td class="num" style="color:var(--accent-strong)">${pct1(a.max_drawdown)}</td>
+        <td class="num" style="color:${hot ? 'var(--up)' : 'var(--sub)'};font-weight:${hot ? 600 : 400}">${pct1(rc)}${hot ? ' ▲' : ''}</td>
+        <td class="num" style="color:var(--sub)">${pct1(a.volatility)}</td>
+        <td class="num" style="color:var(--sub)">${a.beta.toFixed(2)}</td>
       </tr>`;
     }).join('')}</tbody>
   </table></div>`;
 
-  // 비중 최적화 비교
+  // 비중 최적화 제안
   const order = ['current','equal','inverse_vol','risk_parity','min_variance'];
+  const SCHEME_DESC = {
+    current: '지금 보유한 그대로',
+    equal: '모든 종목을 똑같은 금액으로',
+    inverse_vol: '많이 흔들리는 종목은 적게',
+    risk_parity: '각 종목이 위험에 똑같이 기여하도록',
+    min_variance: '전체 출렁임이 가장 작아지도록',
+  };
   const rows = order.map(k => d.schemes[k]).filter(Boolean);
   const bestSharpe = Math.max(...rows.map(r => r.sharpe));
   const bestVol = Math.min(...rows.map(r => r.volatility));
-  const schemeTbl = `<div style="margin-top:14px;font-size:12px;font-weight:600;color:var(--ink)">비중 최적화 제안</div>
-  <div class="tbl-scroll" style="margin-top:4px"><table class="scheme-tbl" style="min-width:560px">
-    <thead><tr><th>전략</th><th>연율 변동성</th><th>샤프</th><th>최대낙폭</th><th>분산비율</th><th style="text-align:left;width:140px">비중</th></tr></thead>
+  const palette = ['var(--accent)','var(--up)','var(--warn)','var(--accent-strong)','var(--sub)','var(--mute)'];
+  const schemeTbl = `<div class="pa-h">💡 이렇게 나눠 담으면?</div>
+  <div class="pa-hint">초록 배경 = 위험 대비 수익이 가장 좋은 방식. 어디까지나 과거 데이터 기준이며 미래 수익을 보장하지 않습니다.</div>
+  <div class="tbl-scroll" style="margin-top:6px"><table class="scheme-tbl" style="min-width:540px">
+    <thead><tr><th>나누는 방식</th><th>출렁임</th><th>수익 효율</th><th>최대 하락</th><th style="text-align:left;width:130px">비중</th></tr></thead>
     <tbody>${order.map(k => {
       const r = d.schemes[k]; if (!r) return '';
       const isBest = r.sharpe === bestSharpe;
-      const wbar = `<div class="wbar">${d.labels.map((t,i) => {
-        const w = r.weights[t] || 0;
-        return `<i style="width:${(w * 100).toFixed(1)}%;background:${['var(--accent)','var(--up)','var(--warn)','var(--accent-strong)','var(--sub)','var(--mute)'][i % 6]}" title="${esc(t)} ${pct1(w)}"></i>`;
-      }).join('')}</div>`;
+      const wbar = `<div class="wbar">${d.labels.map((t,i) =>
+        `<i style="width:${((r.weights[t] || 0) * 100).toFixed(1)}%;background:${palette[i % 6]}" title="${esc(t)} ${pct1(r.weights[t] || 0)}"></i>`).join('')}</div>`;
       return `<tr class="${isBest ? 'best' : ''}">
-        <td>${esc(r.name)}${isBest ? '<span class="tag-best">최고 샤프</span>' : ''}${r.volatility === bestVol ? '<span class="tag-best" style="color:var(--accent-strong);background:var(--accent-a10)">최저 변동성</span>' : ''}</td>
-        <td>${pct1(r.volatility)}</td>
-        <td>${r.sharpe.toFixed(2)}</td>
+        <td><b>${esc(r.name)}</b>${isBest ? '<span class="tag-best">추천</span>' : ''}<div style="font-size:10px;color:var(--mute);font-weight:400">${SCHEME_DESC[k] || ''}</div></td>
+        <td>${pct1(r.volatility)}${r.volatility === bestVol ? ' <span style="color:var(--accent-strong);font-size:9px">최저</span>' : ''}</td>
+        <td style="font-weight:${isBest ? 700 : 400};color:${isBest ? 'var(--up)' : 'var(--ink)'}">${r.sharpe.toFixed(2)}</td>
         <td style="color:var(--accent-strong)">${pct1(r.max_drawdown)}</td>
-        <td>${r.diversification_ratio.toFixed(2)}</td>
         <td style="text-align:left">${wbar}</td>
       </tr>`;
     }).join('')}</tbody>
   </table></div>
-  <div style="font-size:10.5px;color:var(--mute);margin-top:4px">지표는 최근 ${d.observations}거래일 in-sample 기준 · 미래 수익률을 보장하지 않음</div>`;
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;font-size:9.5px;color:var(--mute)">
+    ${d.labels.map((t,i) => `<span><span style="color:${palette[i % 6]}">■</span> ${esc(t)}</span>`).join('')}
+  </div>`;
 
-  // 상관관계 히트맵
+  // 상관관계
   const L = d.labels;
-  const heat = `<div style="margin-top:14px;font-size:12px;font-weight:600;color:var(--ink)">상관관계 <span style="font-weight:400;color:var(--mute)">평균 ${d.avg_correlation.toFixed(2)}</span></div>
-  <div class="tbl-scroll" style="margin-top:4px"><table class="heat">
+  const corrJudge = d.avg_correlation < 0.3 ? '분산 효과가 큽니다 👍' : d.avg_correlation < 0.6 ? '분산 효과는 보통입니다' : '종목들이 함께 움직여 분산 효과가 작습니다 ⚠️';
+  const heat = `<div class="pa-h">종목 간 상관관계</div>
+  <div class="pa-hint">함께 움직이는 정도 (1=완전히 같이, 0=무관). 평균 <b>${d.avg_correlation.toFixed(2)}</b> — ${corrJudge}</div>
+  <div class="tbl-scroll" style="margin-top:6px"><table class="heat">
     <thead><tr><th></th>${L.map(t => `<th>${esc(t)}</th>`).join('')}</tr></thead>
     <tbody>${L.map(a => `<tr><th style="text-align:left">${esc(a)}</th>${L.map(b => {
       const v = d.correlation[a][b];
@@ -2047,7 +2193,14 @@ function renderAnalytics(d){
     }).join('')}</tr>`).join('')}</tbody>
   </table></div>`;
 
-  document.getElementById('pa-body').innerHTML = statHtml + paTbl + schemeTbl + heat;
+  // 용어 가이드
+  const guide = `<details class="pa-guide">
+    <summary>지표가 무슨 뜻인지 궁금하다면</summary>
+    ${PA_GUIDE.map(([n,desc,good]) => `<div class="g-row"><b>${n}</b> — ${desc}<br><span style="color:var(--sub)">기준: ${good}</span></div>`).join('')}
+    <div class="g-row" style="color:var(--mute)">모든 수치는 최근 ${d.observations}거래일의 과거 데이터로 계산했으며, 투자 자문이 아닙니다.</div>
+  </details>`;
+
+  document.getElementById('pa-body').innerHTML = statHtml + paTbl + schemeTbl + heat + guide;
 }
 
 async function runBacktest(){
@@ -2065,9 +2218,9 @@ async function runBacktest(){
   finally { btn.disabled = false; btn.textContent = '다시 실행'; }
 }
 function renderBacktest(d){
-  document.getElementById('bt-meta').textContent = `${d.period} · ${d.lookback_days}일 룩백 · ${d.rebalance_days}일 리밸런싱`;
+  document.getElementById('bt-meta').textContent = `최근 ${d.period === '1y' ? '1년' : d.period} · ${d.rebalance_days}일마다 비중 재조정`;
   const series = d.results.map(r => ({ name: r.name, values: r.equity, color: SCHEME_COLOR[r.scheme] || 'var(--mute)' }));
-  series.push({ name: `${d.benchmark} (벤치)`, values: d.benchmark.equity, color: 'var(--faint)', dash: true });
+  series.push({ name: `${d.benchmark} (시장)`, values: d.benchmark.equity, color: 'var(--faint)', dash: true });
   const W = 660, H = 200;
   const all = series.flatMap(s => s.values);
   const min = Math.min(...all), max = Math.max(...all), rng = (max - min) || 1;
@@ -2082,23 +2235,25 @@ function renderBacktest(d){
     ${series.map(s => `<span><span style="color:${s.color}">━</span> ${esc(s.name)}</span>`).join('')}
   </div>`;
 
-  const rows = d.results.concat([{ name: `${d.benchmark} (벤치)`, scheme: '_b', metrics: d.benchmark.metrics, final_weights: null }]);
+  const rows = d.results.concat([{ name: `${d.benchmark} (시장)`, scheme: '_b', metrics: d.benchmark.metrics }]);
   const bestSharpe = Math.max(...d.results.map(r => r.metrics.sharpe));
-  const tbl = `<div class="tbl-scroll" style="margin-top:10px"><table class="scheme-tbl" style="min-width:520px">
-    <thead><tr><th>전략</th><th>누적수익</th><th>CAGR</th><th>연율 변동성</th><th>샤프</th><th>최대낙폭</th></tr></thead>
+  const bestRet = Math.max(...d.results.map(r => r.metrics.cumulative_return));
+  const tbl = `<div class="tbl-scroll" style="margin-top:10px"><table class="scheme-tbl" style="min-width:500px">
+    <thead><tr><th>나누는 방식</th><th>1년 수익률</th><th>출렁임</th><th>수익 효율</th><th>최대 하락</th></tr></thead>
     <tbody>${rows.map(r => {
-      const m = r.metrics, best = r.metrics.sharpe === bestSharpe && r.scheme !== '_b';
+      const m = r.metrics, best = m.sharpe === bestSharpe && r.scheme !== '_b';
       return `<tr class="${best ? 'best' : ''}">
-        <td><span style="color:${SCHEME_COLOR[r.scheme] || 'var(--faint)'}">●</span> ${esc(r.name)}${best ? '<span class="tag-best">최고 샤프</span>' : ''}</td>
-        <td style="color:${m.cumulative_return >= 0 ? 'var(--up)' : 'var(--accent-strong)'}">${pct1(m.cumulative_return)}</td>
-        <td>${pct1(m.cagr)}</td>
-        <td>${pct1(m.volatility)}</td>
-        <td>${m.sharpe.toFixed(2)}</td>
+        <td><span style="color:${SCHEME_COLOR[r.scheme] || 'var(--faint)'}">●</span> ${esc(r.name)}${best ? '<span class="tag-best">추천</span>' : ''}</td>
+        <td style="font-weight:${m.cumulative_return === bestRet ? 700 : 400};color:${m.cumulative_return >= 0 ? 'var(--up)' : 'var(--accent-strong)'}">${m.cumulative_return >= 0 ? '+' : ''}${pct1(m.cumulative_return)}</td>
+        <td style="color:var(--sub)">${pct1(m.volatility)}</td>
+        <td style="font-weight:${best ? 700 : 400}">${m.sharpe.toFixed(2)}</td>
         <td style="color:var(--accent-strong)">${pct1(m.max_drawdown)}</td>
       </tr>`;
     }).join('')}</tbody>
-  </table></div>`;
-  document.getElementById('bt-body').innerHTML = svg + tbl;
+  </table></div>
+  <div class="pa-hint" style="margin-top:6px">과거 1년 수익률로 계산한 가상 시뮬레이션입니다. <b>미래 수익을 보장하지 않으며</b>, 실제로는 매매 비용·세금이 추가로 듭니다.</div>`;
+  document.getElementById('bt-body').innerHTML =
+    `<div class="pa-hint" style="margin-bottom:8px">⏱️ <b>1년 전에 이 방식대로 나눠서 투자하고, ${d.rebalance_days}일마다 비중을 맞췄다면</b> 평가금액이 어떻게 움직였을지 비교합니다. (시작점 = 1.0)</div>` + svg + tbl;
 }
 
 let _finAssets = [], _finSummary = null;

@@ -1569,6 +1569,7 @@ async def portfolio_analytics(refresh: bool = False, period: str = "1y") -> dict
         "observations": len(bench),
         "current": schemes["current"],
         "schemes": schemes,
+        "benchmark_metrics": quant.portfolio_metrics(bench, rf),
         "per_asset": per_asset,
         "correlation": quant.correlation_matrix(rba),
         "avg_correlation": round(quant.average_pairwise_correlation(rba), 2),
