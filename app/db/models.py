@@ -31,6 +31,7 @@ class AnalysisReport(Base):
     verdict = Column(String)
     confidence = Column(String)
     report_md = Column(Text)
+    metrics_json = Column(Text, default="")   # 구조화 지표(점수·EV·켈리·신호 등) JSON
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -90,6 +91,20 @@ class AssetItem(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class NetWorthSnapshot(Base):
+    """일별 순자산 스냅샷 — 추이 차트용. 하루 1건(upsert)."""
+    __tablename__ = "net_worth_snapshot"
+    __table_args__ = (UniqueConstraint("date"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(String, nullable=False)          # YYYY-MM-DD
+    total_assets = Column(BigInteger, default=0)   # 등록 자산 합계 (원)
+    stock_value = Column(BigInteger, default=0)    # 주식 평가금액 (원)
+    stock_cost = Column(BigInteger, default=0)     # 주식 매입금액 (원)
+    net_worth = Column(BigInteger, default=0)      # total_assets + stock_value
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class UserApiKey(Base):
     """사용자별 LLM API 키 저장 (추후 로그인 연동 대비)."""
     __tablename__ = "user_api_key"
@@ -123,6 +138,7 @@ def create_all_tables(db_path: str) -> None:
             "ALTER TABLE watchlist ADD COLUMN avg_price REAL DEFAULT 0",
             "ALTER TABLE user_api_key ADD COLUMN is_active INTEGER DEFAULT 0",
             "ALTER TABLE ledger_transaction ADD COLUMN source_recurring_id INTEGER DEFAULT NULL",
+            "ALTER TABLE analysis_report ADD COLUMN metrics_json TEXT DEFAULT ''",
         ]
         for sql in migrations:
             try:

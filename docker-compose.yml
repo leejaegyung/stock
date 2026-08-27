@@ -7,7 +7,7 @@ services:
     volumes:
       - ./data:/app/data                    # SQLite 파일 영속화
       - ./static:/app/static                # 렌더된 브리핑 html
-      - ./app/templates:/app/app/templates  # 템플릿 핫 리로드
+      - ./app:/app/app                      # 앱 코드 핫 리로드 (템플릿 포함)
     expose:
       - "8000"
     restart: unless-stopped

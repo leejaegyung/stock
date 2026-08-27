@@ -3,8 +3,10 @@ Layer 6 — FastAPI web entrypoint.
 Scheduler starts in lifespan; nginx proxies /api/* to this app.
 """
 
+import json
 import logging
 import logging.config
+import re
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -17,7 +19,17 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.db.client import get_session_factory
-from app.db.models import AnalysisReport, AssetItem, LedgerTransaction, NewsItem, RecurringTransaction, UserApiKey, Watchlist, create_all_tables
+from app.db.models import (
+    AnalysisReport,
+    AssetItem,
+    LedgerTransaction,
+    NetWorthSnapshot,
+    NewsItem,
+    RecurringTransaction,
+    UserApiKey,
+    Watchlist,
+    create_all_tables,
+)
 from app.entrypoints.scheduler import start_scheduler, stop_scheduler
 
 # 앱 전체 로거를 INFO로 설정 (uvicorn 기본은 WARNING)
@@ -161,6 +173,7 @@ async def list_reports(limit: int = 20) -> list[dict[str, Any]]:
                 "date": r.date,
                 "verdict": r.verdict,
                 "confidence": r.confidence,
+                "metrics": _row_metrics(r),
                 "created_at": str(r.created_at),
             }
             for r in rows
@@ -181,6 +194,7 @@ async def get_report(report_id: int) -> dict[str, Any]:
             "verdict": row.verdict,
             "confidence": row.confidence,
             "report_md": row.report_md,
+            "metrics": _row_metrics(row),
             "created_at": str(row.created_at),
         }
 
@@ -198,6 +212,88 @@ def _get_api_key(provider: str, user_id: str = "default") -> str:
     return ""
 
 
+# ── 분석 구조화 지표 ──────────────────────────────────────────────────────────
+
+
+def _report_metrics(result: dict) -> dict:
+    """analyze_stock_algo 결과에서 카드 UI용 구조화 지표를 뽑아낸다."""
+    scores = result.get("scores", {}) or {}
+    quant = result.get("quant_risk", {}) or {}
+    ta = result.get("technical", {}) or {}
+    advice = result.get("advice", {}) or {}
+    bulls = result.get("bull_signals", []) or []
+    bears = result.get("bear_signals", []) or []
+    price = ta.get("price")
+    ev = quant.get("ev")
+    target = round(price * (1 + ev / 100), 2) if (price and ev is not None) else None
+    return {
+        "score_total": scores.get("total"),
+        "score_technical": scores.get("technical"),
+        "score_fundamental": scores.get("fundamental"),
+        "score_macro": scores.get("macro"),
+        "score_news": scores.get("news"),
+        "ev": ev,
+        "half_kelly": quant.get("half_kelly"),
+        "valuation": quant.get("valuation"),
+        "cashflow_pattern": quant.get("cashflow_pattern"),
+        "price": price,
+        "target": target,
+        "gap_pct": round((target / price - 1) * 100, 1) if (target and price) else None,
+        "bull_count": len(bulls),
+        "bear_count": len(bears),
+        "key_reasons": (advice.get("key_reasons") or [])[:3],
+        "warnings": (advice.get("warnings") or [])[:2],
+        "duration_sec": result.get("_duration_sec"),
+    }
+
+
+def _parse_metrics_md(md: str) -> dict:
+    """구 보고서(metrics_json 없음) — report_md 텍스트에서 지표 역추출."""
+    md = md or ""
+    out: dict[str, Any] = {}
+    m = re.search(r"종합점수:\s*(\d+)/100", md)
+    if m:
+        out["score_total"] = int(m.group(1))
+    m = re.search(
+        r"기술\s*(\d+)/30\s*·\s*펀더멘털\s*(\d+)/40\s*·\s*거시\s*(\d+)/20\s*·\s*뉴스\s*(\d+)/10", md
+    )
+    if m:
+        out["score_technical"], out["score_fundamental"], out["score_macro"], out["score_news"] = (
+            int(x) for x in m.groups()
+        )
+    m = re.search(r"기대값:\s*([+-]?[\d.]+)%\s*\|\s*켈리 권장비중:\s*([\d.]+)%", md)
+    if m:
+        out["ev"] = float(m.group(1))
+        out["half_kelly"] = float(m.group(2))
+    m = re.search(r"현재가\s*([\d,]+\.?\d*)", md)
+    if m:
+        out["price"] = float(m.group(1).replace(",", ""))
+    m = re.search(r"밸류에이션:\s*(.+)", md)
+    if m:
+        out["valuation"] = m.group(1).strip()
+    bull = re.findall(r"^\s*-\s*🟢\s*(.+?)\s*$", md, re.M)
+    bear = re.findall(r"^\s*-\s*🔴\s*(.+?)\s*$", md, re.M)
+    out["bull_count"] = len(bull)
+    out["bear_count"] = len(bear)
+    out["key_reasons"] = (bull or bear)[:3]
+    out["warnings"] = bear[:2]
+    price, ev = out.get("price"), out.get("ev")
+    if price and ev is not None:
+        tgt = round(price * (1 + ev / 100), 2)
+        out["target"] = tgt
+        out["gap_pct"] = round((tgt / price - 1) * 100, 1)
+    return out
+
+
+def _row_metrics(row: AnalysisReport) -> dict:
+    if getattr(row, "metrics_json", ""):
+        try:
+            return json.loads(row.metrics_json)
+        except (ValueError, TypeError):
+            pass
+    return _parse_metrics_md(row.report_md)
+
+
 # ── Analysis Trigger ──────────────────────────────────────────────────────────
 
 def _bg_analyze(ticker: str, market: str, date_str: str) -> None:
@@ -205,7 +301,10 @@ def _bg_analyze(ticker: str, market: str, date_str: str) -> None:
     from datetime import datetime as _dt
     from app.core.algo_pipeline import analyze_stock_algo, classify_news_algo
 
+    import time as _t
+    _t0 = _t.perf_counter()
     result = analyze_stock_algo(ticker, market, date_str)
+    result["_duration_sec"] = round(_t.perf_counter() - _t0, 1)
     advice = result.get("advice", {})
 
     with _session() as session:
@@ -222,6 +321,7 @@ def _bg_analyze(ticker: str, market: str, date_str: str) -> None:
             verdict=advice.get("verdict"),
             confidence=advice.get("confidence"),
             report_md=advice.get("brief_section", ""),
+            metrics_json=json.dumps(_report_metrics(result), ensure_ascii=False),
         ))
 
         # 분석 시 가져온 뉴스를 DB에 저장 (url_hash dedup)
@@ -329,6 +429,7 @@ def _bg_brief() -> None:
                     verdict=advice.get("verdict"),
                     confidence=advice.get("confidence"),
                     report_md=advice.get("brief_section", ""),
+                    metrics_json=json.dumps(_report_metrics(result), ensure_ascii=False),
                 ))
                 # 뉴스 저장 (url_hash dedup)
                 for item in result.get("raw_news", []):
@@ -382,26 +483,144 @@ async def trigger_brief(background_tasks: BackgroundTasks) -> dict:
 # ── Home Dashboard API ─────────────────────────────────────────────────────────
 
 _macro_cache: dict = {"data": {}, "ts": 0.0}
-_MACRO_TTL = 900  # 15분
+_MACRO_TTL = 1800  # 30분 — 대시보드 지표는 실시간일 필요 없음
+_macro_refreshing = {"v": False}
+
+_cape_cache: dict = {"v": None, "ts": 0.0}
+_CAPE_TTL = 12 * 3600  # CAPE 는 하루 단위로 변함
+
+_MACRO_SYMBOLS = {
+    "sp500": "^GSPC", "nasdaq": "^IXIC", "vix": "^VIX", "dxy": "DX-Y.NYB",
+    "bonds_10y": "^TNX", "gold": "GC=F", "oil_wti": "CL=F", "usd_krw": "KRW=X",
+}
 
 
-def _get_macro_cached() -> dict:
+def _fast_us_macro() -> dict:
+    """yf.download 배치 1회로 미국 거시지표 + 환율. .info 루프 대비 5~8배 빠름."""
     import time
-    now = time.time()
-    if now - _macro_cache["ts"] < _MACRO_TTL and _macro_cache["data"]:
-        return _macro_cache["data"]
+
+    import yfinance as yf
+
+    out: dict = {}
     try:
-        from app.core.datasources.us import USDataSource
-        from app.core.datasources.kr import KRDataSource
-        kr = KRDataSource().get_macro_data()
-        us = USDataSource().get_macro_data()
-        merged = {**kr, **us}
-        _macro_cache["data"] = merged
-        _macro_cache["ts"] = now
-        return merged
+        df = yf.download(
+            list(_MACRO_SYMBOLS.values()), period="5d",
+            progress=False, group_by="ticker", threads=True, auto_adjust=False,
+        )
+        multi = hasattr(df.columns, "levels")
+        for name, sym in _MACRO_SYMBOLS.items():
+            try:
+                closes = (df[sym]["Close"] if multi else df["Close"]).dropna()
+                if len(closes) == 0:
+                    continue
+                last = float(closes.iloc[-1])
+                prev = float(closes.iloc[-2]) if len(closes) > 1 else last
+                out[name] = {
+                    "price": round(last, 2),
+                    "change_pct": round((last / prev - 1) * 100, 2) if prev else None,
+                    "source": "yfinance",
+                }
+            except Exception:
+                continue
     except Exception as e:
-        logger.warning("macro cache refresh failed: %s", e)
+        logger.warning("fast macro batch failed: %s", e)
+
+    # CAPE — 12시간 캐시
+    if not _cape_cache["v"] or time.time() - _cape_cache["ts"] > _CAPE_TTL:
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+
+            r = requests.get(
+                "https://www.multpl.com/shiller-pe",
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=6,
+            )
+            if r.ok:
+                el = BeautifulSoup(r.text, "html.parser").select_one("#current")
+                if el:
+                    m = re.search(r"(\d+\.\d+)", el.get_text())
+                    if m:
+                        _cape_cache["v"] = {"value": float(m.group(1)), "source": "multpl.com"}
+                        _cape_cache["ts"] = time.time()
+        except Exception as e:
+            logger.debug("CAPE fetch failed: %s", e)
+    if _cape_cache["v"]:
+        out["cape"] = _cape_cache["v"]
+    return out
+
+
+def _refresh_macro() -> dict:
+    """미국(배치) + 한국(Naver) 거시지표 동시 수집."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _kr():
+        try:
+            from app.core.datasources.kr import KRDataSource
+            d = KRDataSource().get_macro_data()
+            return {k: d[k] for k in ("kospi", "kosdaq") if k in d}
+        except Exception as e:
+            logger.warning("KR macro failed: %s", e)
+            return {}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_us = pool.submit(_fast_us_macro)
+        f_kr = pool.submit(_kr)
+        us, kr = f_us.result(), f_kr.result()
+    return {**kr, **us}
+
+
+def _macro_bg_refresh() -> None:
+    """중복 방지하며 백그라운드에서 거시지표 갱신."""
+    import threading
+    import time
+
+    if _macro_refreshing["v"]:
+        return
+    _macro_refreshing["v"] = True
+
+    def _bg():
+        try:
+            d = _refresh_macro()
+            if d:
+                _macro_cache["data"] = d
+                _macro_cache["ts"] = time.time()
+        finally:
+            _macro_refreshing["v"] = False
+
+    threading.Thread(target=_bg, daemon=True).start()
+
+
+def _get_macro_cached(force: bool = False) -> dict:
+    """
+    절대 요청을 블로킹하지 않는다(force=True 제외).
+    - 신선하면 캐시 반환
+    - 오래됐거나 비어있으면: 캐시(있으면) 즉시 반환 + 백그라운드 갱신
+    - force=True(프리워밍/스케줄러): 동기 갱신
+    """
+    import time
+
+    now = time.time()
+    fresh = _macro_cache["data"] and now - _macro_cache["ts"] < _MACRO_TTL
+
+    if force:
+        try:
+            d = _refresh_macro()
+            if d:
+                _macro_cache["data"] = d
+                _macro_cache["ts"] = now
+        except Exception as e:
+            logger.warning("macro refresh failed: %s", e)
         return _macro_cache["data"] or {}
+
+    if not fresh:
+        _macro_bg_refresh()
+    return _macro_cache["data"] or {}
+
+
+@app.get("/api/macro")
+async def macro_data() -> dict:
+    """거시지표만 별도 조회 (티커 바 지연 로딩용)."""
+    return _get_macro_cached()
 
 
 @app.get("/api/home")
@@ -431,6 +650,7 @@ async def home_data() -> dict:
                     "verdict": row.verdict,
                     "confidence": row.confidence,
                     "date": row.date,
+                    "metrics": _row_metrics(row),
                 }
 
         # 오늘 브리핑
@@ -804,48 +1024,116 @@ async def apply_recurring(year: int, month: int) -> dict:
 # ── 포트폴리오 (보유 종목 평가 + 배당) ────────────────────────────────────────────
 
 _portfolio_cache: dict = {"data": [], "ts": 0.0}
-_PORTFOLIO_TTL = 300  # 5분
+_PORTFOLIO_TTL = 600  # 10분 — 배치 다운로드로 갱신 비용 낮음
+
+_pxdf_cache: dict = {}      # "ticker:market:period" -> (ts, DataFrame)
+_PXDF_TTL = 1800           # 30분 — history/analytics/backtest/sparkline 공용
+
+_div_cache: dict = {}       # "ticker:market" -> (ts, {rate, yield, months})
+_DIV_TTL = 24 * 3600       # 배당 정보는 하루 1회면 충분
 
 
-def _fetch_price_and_dividend(ticker: str, market: str) -> dict:
-    """현재가 + 배당 정보 조회. 실패 시 None 반환."""
-    out = {"price": None, "dividend_rate": 0.0, "dividend_yield": 0.0,
-           "currency": "USD" if market == "US" else "KRW"}
+def _price_df(ticker: str, market: str, period: str = "1y"):
+    """가격 시계열 통합 캐시 — history·analytics·backtest·스파크라인이 공유."""
+    import time
+
+    from app.core.algo_pipeline import _fetch_price_df
+
+    key = f"{ticker}:{market}:{period}"
+    now = time.time()
+    hit = _pxdf_cache.get(key)
+    if hit and now - hit[0] < _PXDF_TTL:
+        return hit[1]
+    df = _fetch_price_df(ticker, market, period=period)
+    _pxdf_cache[key] = (now, df)
+    return df
+
+
+def _dividends(ticker: str, market: str) -> dict:
+    """주당 배당·수익률·지급월 — 24시간 캐시."""
+    import time
+
+    key = f"{ticker}:{market}"
+    now = time.time()
+    hit = _div_cache.get(key)
+    if hit and now - hit[0] < _DIV_TTL:
+        return hit[1]
+    out = {"rate": 0.0, "yield": 0.0, "months": []}
     try:
         import yfinance as yf
-        if market == "US":
-            t = yf.Ticker(ticker)
-            info = t.info
-            market_state = info.get("marketState", "CLOSED")  # PRE|REGULAR|POST|CLOSED
-            if market_state == "REGULAR":
-                # 장중: 실시간 체결가
-                out["price"] = info.get("currentPrice") or info.get("regularMarketPrice")
-            else:
-                # 프리/포스트마켓·장외: 전일 공식 종가 (증권사 기준과 일치)
-                out["price"] = info.get("regularMarketPrice") or info.get("previousClose")
-            out["prev_close"] = info.get("previousClose")
-            out["market_state"] = market_state
-            out["dividend_rate"] = float(info.get("dividendRate") or 0)
-            out["dividend_yield"] = float(info.get("dividendYield") or 0)
-        else:
-            # KR 현재가: Naver 모바일 API
-            import requests as _req
-            r = _req.get(
-                f"https://m.stock.naver.com/api/stock/{ticker}/basic",
-                headers={"User-Agent": "Mozilla/5.0"}, timeout=5,
-            )
-            if r.ok:
-                data = r.json()
-                price_str = data.get("closePrice", "0").replace(",", "")
-                out["price"] = float(price_str) if price_str else None
-            # KR 배당: yfinance (.KS 코드)
-            t = yf.Ticker(f"{ticker}.KS")
-            info = t.info
-            out["dividend_rate"] = float(info.get("dividendRate") or 0)
-            out["dividend_yield"] = float(info.get("dividendYield") or 0)
+
+        yft = yf.Ticker(ticker if market == "US" else f"{ticker}.KS")
+        try:
+            divs = yft.dividends
+            if divs is not None and len(divs):
+                out["months"] = sorted({int(d.month) for d in divs.tail(6).index})
+        except Exception:
+            pass
+        info = yft.info or {}
+        out["rate"] = float(info.get("dividendRate") or 0)
+        _dy = float(info.get("dividendYield") or 0)
+        out["yield"] = _dy / 100 if _dy > 1 else _dy
     except Exception as e:
-        logger.debug("price/dividend fetch failed %s[%s]: %s", ticker, market, e)
+        logger.debug("dividend fetch failed %s: %s", key, e)
+    _div_cache[key] = (now, out)
     return out
+
+
+def _us_market_state() -> str:
+    """ET 근사로 미국 장 상태 추정 (API 호출 없이, 표시용)."""
+    from datetime import datetime, timedelta, timezone
+
+    et = datetime.now(timezone.utc) - timedelta(hours=5)
+    if et.weekday() >= 5:
+        return "CLOSED"
+    hm = et.hour * 60 + et.minute
+    if hm < 4 * 60:
+        return "CLOSED"
+    if hm < 9 * 60 + 30:
+        return "PRE"
+    if hm < 16 * 60:
+        return "REGULAR"
+    if hm < 20 * 60:
+        return "POST"
+    return "CLOSED"
+
+
+def _batch_prices(items: list[tuple]) -> dict:
+    """US·KR 각각 yf.download 1회(1개월)로 종가·전일종가·스파크라인 배치 조회."""
+    import yfinance as yf
+
+    us = [t for (t, m, *_) in items if m == "US"]
+    kr = [f"{t}.KS" for (t, m, *_) in items if m == "KR"]
+    px: dict = {}
+
+    def _load(syms):
+        if not syms:
+            return
+        try:
+            df = yf.download(
+                syms, period="1mo", progress=False,
+                group_by="ticker", threads=True, auto_adjust=False,
+            )
+            multi = hasattr(df.columns, "levels")
+            for s in syms:
+                try:
+                    c = (df[s]["Close"] if multi else df["Close"]).dropna()
+                    if len(c):
+                        px[s] = {
+                            "last": float(c.iloc[-1]),
+                            "prev": float(c.iloc[-2]) if len(c) > 1 else float(c.iloc[-1]),
+                            "spark": [round(float(x), 4) for x in c.tolist()][-30:],
+                        }
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.warning("batch price failed (%s): %s", syms, e)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(_load, [us, kr]))
+    return px
 
 
 @app.get("/api/portfolio")
@@ -866,57 +1154,520 @@ async def get_portfolio(refresh: bool = False) -> list[dict]:
             for r in rows
         ]
 
-    result = []
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    if not items:
+        _portfolio_cache["data"] = []
+        _portfolio_cache["ts"] = now
+        return []
+
+    px = _batch_prices(items)
+    mkt_state = _us_market_state()
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    tm_keys = [(t, m) for (t, m, *_) in items]
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(_fetch_price_and_dividend, t, m): (t, m, n, q, ap)
-                   for (t, m, n, q, ap) in items}
-        for future in as_completed(futures):
-            ticker, market, name, qty, avg_p = futures[future]
-            pd_data = future.result()
-            price_raw = pd_data["price"]   # US: USD, KR: KRW
+        div_map = dict(zip(tm_keys, pool.map(lambda tm: _dividends(*tm), tm_keys), strict=False))
 
-            # 현재가 → 원화 환산
-            if price_raw is not None:
-                price_krw = round(price_raw * usd_krw) if market == "US" else round(price_raw)
-            else:
-                price_krw = None
+    result = []
+    for (ticker, market, name, qty, avg_p) in items:
+        sym = ticker if market == "US" else f"{ticker}.KS"
+        lp = px.get(sym)
+        if lp is None:
+            df = _price_df(ticker, market, "1y")
+            if df is not None and not getattr(df, "empty", True) and "Close" in df.columns:
+                cl = df["Close"].dropna()
+                if len(cl):
+                    lp = {
+                        "last": float(cl.iloc[-1]),
+                        "prev": float(cl.iloc[-2]) if len(cl) > 1 else float(cl.iloc[-1]),
+                        "spark": [round(float(x), 4) for x in cl.tolist()][-30:],
+                    }
 
-            div_rate = pd_data["dividend_rate"]   # 주당 연간 배당 (현지통화)
-            # 배당도 원화 환산
-            div_rate_krw = round(div_rate * usd_krw) if (div_rate and market == "US") else div_rate
+        price_raw = lp["last"] if lp else None
+        prev_close_raw = lp["prev"] if lp else None
+        div = div_map.get((ticker, market), {"rate": 0.0, "yield": 0.0, "months": []})
 
-            curr_val = round(price_krw * qty) if price_krw else None   # 원화 평가금액
-            cost     = round(avg_p * qty) if avg_p else None            # 원화 매입금액 (사용자 입력 기준)
-            gl       = round(curr_val - cost) if (curr_val is not None and cost) else None
-            gl_pct   = round(gl / cost * 100, 2) if (gl is not None and cost) else None
+        pd_data = {
+            "price": price_raw,
+            "prev_close": prev_close_raw,
+            "market_state": mkt_state if market == "US" else "CLOSED",
+            "dividend_rate": div["rate"],
+            "dividend_yield": div["yield"],
+            "dividend_months": div["months"],
+            "sparkline": lp["spark"] if lp else [],
+            "currency": "USD" if market == "US" else "KRW",
+        }
+        # 현재가 → 원화 환산
+        price_krw = None
+        if price_raw is not None:
+            price_krw = round(price_raw * usd_krw) if market == "US" else round(price_raw)
 
-            result.append({
-                "ticker": ticker,
-                "market": market,
-                "name": name,
-                "quantity": qty,
-                "avg_price": avg_p,
-                "current_price_orig": price_raw,
-                "current_price_krw": price_krw,
-                "current_value": curr_val,
-                "cost": cost,
-                "gain_loss": gl,
-                "gain_loss_pct": gl_pct,
-                "dividend_rate_orig": div_rate,
-                "dividend_rate_krw": div_rate_krw,
-                "dividend_yield": pd_data["dividend_yield"],
-                "annual_dividend_krw": round(div_rate_krw * qty) if div_rate_krw else 0,
-                "currency": pd_data["currency"],
-                "market_state": pd_data.get("market_state", ""),
-                "prev_close": pd_data.get("prev_close"),
-                "usd_krw": usd_krw,
-            })
+        div_rate = pd_data["dividend_rate"]   # 주당 연간 배당 (현지통화)
+        div_rate_krw = round(div_rate * usd_krw) if (div_rate and market == "US") else div_rate
+
+        curr_val = round(price_krw * qty) if price_krw else None
+        cost = round(avg_p * qty) if avg_p else None
+        gl = round(curr_val - cost) if (curr_val is not None and cost) else None
+        gl_pct = round(gl / cost * 100, 2) if (gl is not None and cost) else None
+
+        result.append({
+            "ticker": ticker,
+            "market": market,
+            "name": name,
+            "quantity": qty,
+            "avg_price": avg_p,
+            "current_price_orig": price_raw,
+            "current_price_krw": price_krw,
+            "current_value": curr_val,
+            "cost": cost,
+            "gain_loss": gl,
+            "gain_loss_pct": gl_pct,
+            "dividend_rate_orig": div_rate,
+            "dividend_rate_krw": div_rate_krw,
+            "dividend_yield": pd_data["dividend_yield"],
+            "annual_dividend_krw": round(div_rate_krw * qty) if div_rate_krw else 0,
+            "currency": pd_data["currency"],
+            "market_state": pd_data.get("market_state", ""),
+            "prev_close": pd_data.get("prev_close"),
+            "sparkline": pd_data.get("sparkline", []),
+            "dividend_months": pd_data.get("dividend_months", []),
+            "usd_krw": usd_krw,
+        })
 
     result.sort(key=lambda x: x["ticker"])
     _portfolio_cache["data"] = result
     _portfolio_cache["ts"] = now
+
+    # 순자산 스냅샷 기록 (하루 1건 upsert)
+    try:
+        stock_value = sum(p["current_value"] or 0 for p in result)
+        stock_cost = sum(p["cost"] or 0 for p in result)
+        with _session() as s:
+            assets_total = sum(a.amount or 0 for a in s.query(AssetItem).all())
+        _record_networth_snapshot(assets_total, stock_value, stock_cost)
+    except Exception as e:
+        logger.debug("networth snapshot skipped: %s", e)
+
     return result
+
+
+def _record_networth_snapshot(total_assets: int, stock_value: int, stock_cost: int) -> None:
+    today = date.today().isoformat()
+    nw = int(total_assets) + int(stock_value)
+    with _session() as s:
+        row = s.query(NetWorthSnapshot).filter_by(date=today).first()
+        if row:
+            row.total_assets = int(total_assets)
+            row.stock_value = int(stock_value)
+            row.stock_cost = int(stock_cost)
+            row.net_worth = nw
+        else:
+            s.add(
+                NetWorthSnapshot(
+                    date=today,
+                    total_assets=int(total_assets),
+                    stock_value=int(stock_value),
+                    stock_cost=int(stock_cost),
+                    net_worth=nw,
+                )
+            )
+        s.commit()
+
+
+@app.get("/api/networth/history")
+async def networth_history(days: int = 180) -> list[dict]:
+    """순자산 추이 (일별 스냅샷)."""
+    with _session() as s:
+        rows = s.query(NetWorthSnapshot).order_by(NetWorthSnapshot.date).all()
+        out = [
+            {
+                "date": r.date,
+                "net_worth": r.net_worth,
+                "total_assets": r.total_assets,
+                "stock_value": r.stock_value,
+                "stock_cost": r.stock_cost,
+            }
+            for r in rows
+        ]
+    return out[-days:]
+
+
+
+# ── 가격 히스토리 (차트·스파크라인·OHLC) ─────────────────────────────────────
+
+_history_cache: dict = {}
+_HISTORY_TTL = 600  # 10분
+
+_RANGE_MAP = {
+    "1일": "5d",
+    "1주": "5d",
+    "1개월": "1mo",
+    "3개월": "3mo",
+    "1년": "1y",
+    "전체": "max",
+    "1d": "5d",
+    "1w": "5d",
+    "5d": "5d",
+    "1mo": "1mo",
+    "1m": "1mo",
+    "3mo": "3mo",
+    "3m": "3mo",
+    "6mo": "6mo",
+    "1y": "1y",
+    "max": "max",
+    "all": "max",
+}
+_RANGE_WINDOW = {"5d": 6, "1mo": 22, "3mo": 66, "6mo": 132, "1y": 252, "max": 100000}
+
+
+@app.get("/api/history/{ticker}")
+async def price_history(ticker: str, market: str = "US", range: str = "3개월") -> dict:
+    """종가·OHLC·거래량·MA20·52주 고저. 차트/스파크라인 공용."""
+    import time
+
+    t, m = ticker.upper(), market.upper()
+    rng = _RANGE_MAP.get(range, "3mo")
+    ck = f"{t}:{m}:{rng}"
+    now = time.time()
+    hit = _history_cache.get(ck)
+    if hit and now - hit[0] < _HISTORY_TTL:
+        return hit[1]
+
+    period = "max" if rng == "max" else ("2y" if rng == "1y" else "1y")
+    try:
+        df = _price_df(t, m, period=period)
+    except Exception as e:
+        logger.warning("history fetch failed %s: %s", t, e)
+        df = None
+
+    empty = {
+        "ticker": t,
+        "market": m,
+        "range": rng,
+        "points": [],
+        "ma20": [],
+        "week52_high": None,
+        "week52_low": None,
+        "last_close": None,
+        "prev_close": None,
+        "day_open": None,
+        "day_high": None,
+        "day_low": None,
+        "day_volume": None,
+        "change_pct": None,
+    }
+    if df is None or getattr(df, "empty", True):
+        return empty
+
+    try:
+        import math
+
+        need = {"Open", "High", "Low", "Close", "Volume"}
+        if not need.issubset(set(df.columns)):
+            return empty
+
+        ma20_full = df["Close"].rolling(20).mean()
+        window = _RANGE_WINDOW.get(rng, 66)
+        wdf = df if rng == "max" else df.tail(window)
+        ma_w = ma20_full.reindex(wdf.index)
+
+        rows = []
+        for idx, (dt, r) in enumerate(wdf.iterrows()):
+            rows.append(
+                {
+                    "d": dt.strftime("%m-%d"),
+                    "o": round(float(r["Open"]), 4),
+                    "h": round(float(r["High"]), 4),
+                    "l": round(float(r["Low"]), 4),
+                    "c": round(float(r["Close"]), 4),
+                    "v": int(r["Volume"]) if not math.isnan(r["Volume"]) else 0,
+                    "ma": (
+                        round(float(ma_w.iloc[idx]), 4) if not math.isnan(ma_w.iloc[idx]) else None
+                    ),
+                }
+            )
+
+        # 다운샘플 (최대 ~130 포인트)
+        if len(rows) > 130:
+            step = math.ceil(len(rows) / 130)
+            rows = rows[::step] + ([rows[-1]] if (len(rows) - 1) % step else [])
+
+        last = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) > 1 else last
+        last_c = float(last["Close"])
+        prev_c = float(prev["Close"])
+        y252 = df.tail(252)
+        out = {
+            "ticker": t,
+            "market": m,
+            "range": rng,
+            "points": rows,
+            "ma20": [x["ma"] for x in rows],
+            "week52_high": round(float(y252["High"].max()), 4),
+            "week52_low": round(float(y252["Low"].min()), 4),
+            "last_close": round(last_c, 4),
+            "prev_close": round(prev_c, 4),
+            "day_open": round(float(last["Open"]), 4),
+            "day_high": round(float(last["High"]), 4),
+            "day_low": round(float(last["Low"]), 4),
+            "day_volume": int(last["Volume"]) if not math.isnan(float(last["Volume"])) else 0,
+            "change_pct": round((last_c / prev_c - 1) * 100, 2) if prev_c else None,
+        }
+        _history_cache[ck] = (now, out)
+        return out
+    except Exception as e:
+        logger.warning("history build failed %s: %s", t, e)
+        return empty
+
+
+# ── 포트폴리오 계량 분석 (gs-quant 스타일) ───────────────────────────────────
+
+_BENCHMARK = "SPY"  # 글로벌 주식 벤치마크
+_analytics_cache: dict = {}
+_ANALYTICS_TTL = 1800  # 30분
+
+
+def _rf_annual() -> float:
+    """무위험수익률 추정: 미국 10Y 금리(캐시), 없으면 4%."""
+    try:
+        v = _get_macro_cached().get("bonds_10y", {}).get("price")
+        if v:
+            return float(v) / 100.0
+    except Exception:
+        pass
+    return 0.04
+
+
+def _aligned_returns(tickers: list[tuple[str, str]], period: str = "1y"):
+    """
+    보유 종목 + 벤치마크의 일간 종가를 받아 공통 날짜로 정렬한 수익률을 반환.
+    returns (labels, returns_matrix, bench_returns) — 실패 종목은 제외.
+    """
+    import pandas as pd
+
+    series: dict[str, pd.Series] = {}
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(tm):
+        t, m = tm
+        try:
+            df = _price_df(t, m, period=period)
+            if df is not None and not getattr(df, "empty", True) and "Close" in df.columns:
+                return t, df["Close"].dropna()
+        except Exception as e:
+            logger.debug("analytics price fetch failed %s: %s", t, e)
+        return t, None
+
+    jobs = list(tickers) + [(_BENCHMARK, "US")]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for t, s in pool.map(_one, jobs):
+            if s is not None and len(s) > 30:
+                series[t] = s
+
+    if _BENCHMARK not in series or len(series) < 2:
+        return [], [], []
+
+    frame = pd.concat(series, axis=1).dropna()
+    if len(frame) < 30:
+        return [], [], []
+
+    rets = frame.pct_change().dropna()
+    bench = [float(x) for x in rets[_BENCHMARK].tolist()]
+    labels = [t for (t, _) in tickers if t in rets.columns]
+    matrix = [[float(x) for x in rets[t].tolist()] for t in labels]
+    return labels, matrix, bench
+
+
+@app.get("/api/portfolio/analytics")
+async def portfolio_analytics(refresh: bool = False, period: str = "1y") -> dict:
+    """보유 포트폴리오의 위험·분산·비중 최적화 분석."""
+    import time
+
+    from app.core import quant
+
+    ck = f"analytics:{period}"
+    now = time.time()
+    hit = _analytics_cache.get(ck)
+    if not refresh and hit and now - hit[0] < _ANALYTICS_TTL:
+        return hit[1]
+
+    with _session() as session:
+        rows = session.query(Watchlist).filter(Watchlist.quantity > 0).all()
+        holds = [
+            (r.ticker, r.market, float(r.quantity or 0), float(r.avg_price or 0)) for r in rows
+        ]
+
+    if len(holds) < 2:
+        return {
+            "ok": False,
+            "reason": "보유 종목이 2개 이상이어야 분석할 수 있습니다.",
+            "holdings": len(holds),
+        }
+
+    tickers = [(t, m) for (t, m, _, _) in holds]
+    labels, matrix, bench = _aligned_returns(tickers, period)
+    if not labels or len(labels) < 2:
+        return {
+            "ok": False,
+            "reason": "가격 시계열을 충분히 확보하지 못했습니다.",
+            "holdings": len(holds),
+        }
+
+    # 현재 비중 (평가금액 기준) — /api/portfolio 재사용
+    pf = await get_portfolio()
+    val_by_ticker = {p["ticker"]: (p.get("current_value") or 0) for p in pf}
+    raw_w = [val_by_ticker.get(t, 0) for t in labels]
+    tot = sum(raw_w) or 1.0
+    cur_w = [w / tot for w in raw_w]
+    if sum(cur_w) == 0:
+        cur_w = quant.equal_weights(len(labels))
+
+    rf = _rf_annual()
+    rba = {t: matrix[i] for i, t in enumerate(labels)}
+
+    def _scheme(name, w):
+        pr = quant.portfolio_returns(matrix, w)
+        m = quant.portfolio_metrics(pr, rf)
+        m["diversification_ratio"] = round(quant.diversification_ratio(matrix, w), 2)
+        m["effective_holdings"] = round(quant.effective_holdings(w), 2)
+        m["weights"] = {labels[i]: round(w[i], 4) for i in range(len(labels))}
+        m["risk_contributions"] = {
+            labels[i]: round(rc, 4) for i, rc in enumerate(quant.risk_contributions(matrix, w))
+        }
+        m["name"] = name
+        return m
+
+    schemes = {
+        "current": _scheme("현재 비중", cur_w),
+        "equal": _scheme("동일 비중", quant.equal_weights(len(labels))),
+        "inverse_vol": _scheme("역변동성", quant.inverse_vol_weights(matrix)),
+        "risk_parity": _scheme("리스크 패리티", quant.risk_parity_weights(matrix)),
+        "min_variance": _scheme("최소 분산", quant.min_variance_weights(matrix)),
+    }
+
+    per_asset = []
+    for i, t in enumerate(labels):
+        per_asset.append(
+            {
+                "ticker": t,
+                "weight": round(cur_w[i], 4),
+                "volatility": round(quant.annualized_volatility(matrix[i]), 4),
+                "beta": round(quant.beta(matrix[i], bench), 2),
+                "sharpe": round(quant.sharpe_ratio(matrix[i], rf), 2),
+                "max_drawdown": round(quant.max_drawdown(matrix[i]), 4),
+                "corr_benchmark": round(quant.correlation(matrix[i], bench), 2),
+            }
+        )
+
+    out = {
+        "ok": True,
+        "period": period,
+        "as_of": date.today().isoformat(),
+        "benchmark": _BENCHMARK,
+        "rf_annual": round(rf, 4),
+        "labels": labels,
+        "observations": len(bench),
+        "current": schemes["current"],
+        "schemes": schemes,
+        "per_asset": per_asset,
+        "correlation": quant.correlation_matrix(rba),
+        "avg_correlation": round(quant.average_pairwise_correlation(rba), 2),
+        "portfolio_beta": round(
+            sum(cur_w[i] * quant.beta(matrix[i], bench) for i in range(len(labels))), 2
+        ),
+        "concentration_hhi": round(quant.herfindahl_index(cur_w), 3),
+    }
+    _analytics_cache[ck] = (now, out)
+    return out
+
+
+class BacktestReq(BaseModel):
+    schemes: list[str] = ["current", "equal", "risk_parity"]
+    period: str = "1y"
+    lookback_days: int = 63
+    rebalance_days: int = 21
+
+
+@app.post("/api/backtest")
+async def run_backtest(body: BacktestReq) -> dict:
+    """보유 종목으로 여러 비중 전략을 주기적 리밸런싱 백테스트."""
+    from app.core import quant
+
+    with _session() as session:
+        rows = session.query(Watchlist).filter(Watchlist.quantity > 0).all()
+        holds = [(r.ticker, r.market) for r in rows]
+
+    if len(holds) < 2:
+        return {"ok": False, "reason": "보유 종목이 2개 이상이어야 백테스트할 수 있습니다."}
+
+    labels, matrix, bench = _aligned_returns(holds, body.period)
+    if not labels or len(labels) < 2:
+        return {"ok": False, "reason": "가격 시계열을 확보하지 못했습니다."}
+
+    pf = await get_portfolio()
+    val = {p["ticker"]: (p.get("current_value") or 0) for p in pf}
+    raw = [val.get(t, 0) for t in labels]
+    tot = sum(raw) or 1.0
+    cur_w = [w / tot for w in raw] if tot else quant.equal_weights(len(labels))
+
+    rf = _rf_annual()
+    valid = [
+        s
+        for s in body.schemes
+        if s in ("current", "equal", "inverse_vol", "risk_parity", "min_variance")
+    ]
+    results = []
+    for s in valid or ["current", "equal", "risk_parity"]:
+        r = quant.backtest_rebalance(
+            matrix,
+            scheme=s,
+            current_weights=cur_w,
+            lookback=max(20, body.lookback_days),
+            rebalance_every=max(5, body.rebalance_days),
+            rf_annual=rf,
+        )
+        # equity 다운샘플 (최대 120 포인트)
+        eq = r["equity"]
+        if len(eq) > 120:
+            step = (len(eq) + 119) // 120
+            eq = eq[::step] + ([eq[-1]] if (len(eq) - 1) % step else [])
+        results.append(
+            {
+                "scheme": s,
+                "name": {
+                    "current": "현재 비중",
+                    "equal": "동일 비중",
+                    "inverse_vol": "역변동성",
+                    "risk_parity": "리스크 패리티",
+                    "min_variance": "최소 분산",
+                }.get(s, s),
+                "equity": eq,
+                "metrics": r["metrics"],
+                "final_weights": {labels[i]: r["final_weights"][i] for i in range(len(labels))},
+            }
+        )
+
+    # 벤치마크(SPY) 비교 — 전략과 동일 구간으로 정렬
+    _lb = max(20, body.lookback_days)
+    _bt_start = min(_lb, max(0, len(bench) - 1))
+    bench_eq = quant.equity_curve(bench[_bt_start:])
+    if len(bench_eq) > 120:
+        step = (len(bench_eq) + 119) // 120
+        bench_eq = bench_eq[::step] + ([bench_eq[-1]] if (len(bench_eq) - 1) % step else [])
+
+    return {
+        "ok": True,
+        "period": body.period,
+        "labels": labels,
+        "lookback_days": body.lookback_days,
+        "rebalance_days": body.rebalance_days,
+        "results": results,
+        "benchmark": {
+            "ticker": _BENCHMARK,
+            "equity": bench_eq,
+            "metrics": quant.portfolio_metrics(bench[_bt_start:], rf),
+        },
+    }
 
 
 # ── API 키 설정 ────────────────────────────────────────────────────────────────

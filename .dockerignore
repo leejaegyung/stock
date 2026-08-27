@@ -1,7 +1,10 @@
 .env
+.venv/
+venv/
 .agents/
 .claude/
 .git/
+untitled/
 __pycache__/
 *.pyc
 *.pyo

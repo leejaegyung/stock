@@ -1,3 +1,6 @@
+# `pre-commit install` 하면 pre-commit + pre-push 훅이 모두 설치됩니다.
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.4.4
@@ -8,6 +11,15 @@ repos:
 
   - repo: local
     hooks:
+      # 커밋·푸시 전에 DB 파일 / .env / API 키가 섞여 올라가는 것을 차단
+      - id: guard-secrets
+        name: Secret & DB Guard
+        entry: python scripts/guard_secrets.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
+
       - id: architecture-boundary
         name: Architecture Layer Boundary Check
         entry: pytest tests/test_architecture.py -v

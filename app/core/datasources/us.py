@@ -108,19 +108,25 @@ class USDataSource(DataSourceBase):
         except Exception:
             bal_dict = {}
 
+        info_slice = {
+            k: info.get(k)
+            for k in [
+                "shortName", "sector", "industry",
+                "trailingPE", "forwardPE", "returnOnEquity",
+                "debtToEquity", "dividendYield", "earningsGrowth",
+                "revenueGrowth", "profitMargins", "operatingMargins",
+                "marketCap", "currentPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
+            ]
+        }
+        # yfinance ≥0.2.5x: dividendYield가 이미 퍼센트(예: 2.31)로 옴 → 소수(0.0231)로 정규화
+        _dy = info_slice.get("dividendYield")
+        if _dy is not None and _dy > 1:
+            info_slice["dividendYield"] = _dy / 100
+
         return {
             "ticker": ticker,
             "market": "US",
-            "info": {
-                k: info.get(k)
-                for k in [
-                    "shortName", "sector", "industry",
-                    "trailingPE", "forwardPE", "returnOnEquity",
-                    "debtToEquity", "dividendYield", "earningsGrowth",
-                    "revenueGrowth", "profitMargins", "operatingMargins",
-                    "marketCap", "currentPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
-                ]
-            },
+            "info": info_slice,
             "financials": fin_dict,
             "cashflow": cf_latest,
             "balance_sheet": {str(k): v for k, v in bal_dict.items()},

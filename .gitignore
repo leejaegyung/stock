@@ -2,11 +2,15 @@
 .env
 *.env
 
-# 데이터베이스
+# 데이터베이스 (개인 관심종목·가계부·자산·API 키 — 절대 커밋 금지.
+# 앱 기동 시 create_all_tables() 가 빈 스키마를 자동 생성함.
+# 로컬 DB 를 비우려면: python scripts/reset_db.py)
 data/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
 
 # 렌더 결과물
 static/

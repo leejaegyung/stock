@@ -39,6 +39,9 @@ Layer 0: config.py  (모든 레이어 공유)
 ```
 app/config.py                    — Settings (pydantic-settings, .env)
 app/core/formulas.py             — EV·켈리·CAPE·현금흐름 순수 함수 (Layer 1)
+app/core/quant.py                — 포트폴리오 계량 분석 순수 함수 (Layer 1): 변동성·샤프·소르티노·
+                                   MDD·VaR·베타·상관·분산비율·비중 최적화(동일/역변동성/리스크패리티/
+                                   최소분산)·리밸런싱 백테스트. gs-quant timeseries 스타일, 외부 API 없음
 app/db/models.py                 — Watchlist, AnalysisReport, NewsItem
 app/db/client.py                 — SQLite + WAL 모드
 app/core/datasources/us.py       — yfinance 데이터소스 (US)
@@ -97,10 +100,19 @@ WATCHER_INTERVAL_MIN=15
 ## Running Tests
 ```bash
 pytest tests/test_formulas.py -v       # 항상 가능 (순수 함수)
+pytest tests/test_quant.py -v          # 항상 가능 (포트폴리오 계량 분석)
 pytest tests/test_architecture.py -v  # 항상 가능 (파일 스캔)
 pytest tests/ -m "not live" -v        # API key 없이 전체
 pytest tests/ -m live -v              # API key 있을 때
 ```
+
+## DB 초기화 & 커밋 안전장치
+- **DB 는 절대 git 에 올라가지 않는다.** `data/`, `*.db*`, `.env` 는 `.gitignore` 대상.
+  앱 기동 시 `create_all_tables()` 가 빈 스키마를 자동 생성하므로 커밋할 필요가 없다.
+- **훅 설치** (최초 1회): `sh scripts/install_hooks.sh` → pre-commit + **pre-push** 에
+  `scripts/guard_secrets.py` 가 걸려, DB 파일 / `.env` / API 키가 섞여 push 되면 차단한다.
+- **로컬 DB 비우기**: `python scripts/reset_db.py` (모든 행 삭제, 스키마 유지).
+  `--yes` 무확인, `--keep-keys` 는 `user_api_key` 보존.
 
 ## Garbage Collection
 ```bash

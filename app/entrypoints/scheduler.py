@@ -5,11 +5,12 @@ Imported by web.py's lifespan; can also run standalone.
 """
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import settings
 from app.db.client import get_session_factory
@@ -295,12 +296,48 @@ def _cleanup_old_news() -> None:
         logger.info("Cleanup: deleted %d news items older than 14 days", deleted)
 
 
+def _prewarm_caches() -> None:
+    """거시지표·포트폴리오 캐시를 미리 갱신 — 사용자 요청이 항상 즉답되도록."""
+    try:
+        import asyncio
+
+        from app.entrypoints.web import _get_macro_cached, get_portfolio, portfolio_analytics
+
+        _get_macro_cached(force=True)
+
+        async def _warm():
+            await get_portfolio(refresh=True)
+            try:
+                await portfolio_analytics(refresh=True)  # SPY 벤치·상관·백테스트 캐시까지
+            except Exception as e:
+                logger.debug("prewarm analytics skipped: %s", e)
+
+        try:
+            asyncio.run(_warm())
+        except Exception as e:
+            logger.debug("prewarm portfolio skipped: %s", e)
+        logger.info("caches pre-warmed (macro + portfolio + analytics)")
+    except Exception as e:
+        logger.warning("prewarm failed: %s", e)
+
+
 def start_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler and _scheduler.running:
         return _scheduler
 
     _scheduler = BackgroundScheduler(timezone=KST)
+
+    # 캐시 프리워밍: 시작 10초 후 + 이후 12분마다
+    _scheduler.add_job(
+        _prewarm_caches,
+        trigger=IntervalTrigger(minutes=12),
+        id="prewarm_caches",
+        next_run_time=datetime.now(KST) + timedelta(seconds=3),
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
 
     # Morning brief: KST 07:00
     _scheduler.add_job(
