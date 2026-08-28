@@ -301,7 +301,12 @@ def _prewarm_caches() -> None:
     try:
         import asyncio
 
-        from app.entrypoints.web import _get_macro_cached, get_portfolio, portfolio_analytics
+        from app.entrypoints.web import (
+            _get_macro_cached,
+            get_portfolio,
+            market_outlook,
+            portfolio_analytics,
+        )
 
         _get_macro_cached(force=True)
 
@@ -311,6 +316,10 @@ def _prewarm_caches() -> None:
                 await portfolio_analytics(refresh=True)  # SPY 벤치·상관·백테스트 캐시까지
             except Exception as e:
                 logger.debug("prewarm analytics skipped: %s", e)
+            try:
+                await market_outlook(refresh=True)  # 시장 전망 (섹터 스캔)
+            except Exception as e:
+                logger.debug("prewarm outlook skipped: %s", e)
 
         try:
             asyncio.run(_warm())

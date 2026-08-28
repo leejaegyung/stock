@@ -358,6 +358,44 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
 .pa-guide .g-row:last-child{border-bottom:none}
 .pa-guide .g-row b{color:var(--ink)}
 .pa-guide .g-row .good{color:var(--up);font-weight:600}
+
+/* ══ 시장 전망 ══ */
+.ol-regime{border-radius:14px;padding:14px 16px;border:1px solid var(--line)}
+.ol-regime .lbl{font-size:11px;font-weight:600;opacity:.85}
+.ol-regime .val{font-size:22px;font-weight:800;letter-spacing:-.02em;margin-top:2px}
+.ol-regime .guide{font-size:12.5px;margin-top:6px;line-height:1.55}
+.ol-regime ul{margin:8px 0 0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:4px 14px}
+.ol-regime li{font-size:11px;opacity:.9;display:flex;gap:5px}
+.ol-good{background:var(--up-a10);border-color:var(--up-a24);color:var(--ink)}
+.ol-good .val{color:var(--up)}
+.ol-mid{background:var(--accent-a06);color:var(--ink)}
+.ol-mid .val{color:var(--accent-strong)}
+.ol-warn{background:var(--warn-a12);border-color:var(--warn-line);color:var(--ink)}
+.ol-warn .val{color:var(--warn)}
+.ol-bad{background:var(--accent-a10);border-color:var(--accent-line);color:var(--ink)}
+.ol-bad .val{color:var(--accent-strong)}
+.sec-row{display:grid;grid-template-columns:88px 1fr 128px;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid var(--line)}
+.sec-row:last-child{border-bottom:none}
+.sec-name{font-size:12.5px;font-weight:600}
+.sec-track{height:8px;background:var(--track);border-radius:4px;overflow:hidden}
+.sec-track>i{display:block;height:8px;border-radius:4px}
+.sec-nums{font-size:11px;font-variant-numeric:tabular-nums;color:var(--sub);text-align:right;white-space:nowrap}
+.grade{display:inline-flex;font-size:10px;font-weight:700;padding:1px 6px;border-radius:6px}
+.grade-good{color:var(--up);background:var(--up-a10)}
+.grade-mid{color:var(--sub);background:var(--chip)}
+.grade-warn{color:var(--warn);background:var(--warn-a12)}
+.grade-bad{color:var(--accent-strong);background:var(--accent-a10)}
+.pick-group{padding:10px 12px;border-bottom:1px solid var(--line)}
+.pick-group:last-child{border-bottom:none}
+.pick-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.pick-head .n{font-size:13px;font-weight:700}
+.pick-stocks{display:flex;flex-wrap:wrap;gap:8px}
+.pick-chip{display:flex;flex-direction:column;gap:2px;border:1px solid var(--line-2);border-radius:10px;padding:7px 10px;min-width:118px}
+.pick-chip .tk{font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.pick-chip .mt{font-size:10px;color:var(--mute);font-variant-numeric:tabular-nums}
+.pick-chip .add{margin-top:3px;font-size:10px;font-weight:600;color:var(--accent);background:var(--accent-soft);border:none;border-radius:6px;padding:2px 0;cursor:pointer;font-family:inherit}
+.pick-chip .add:hover{background:var(--accent-line)}
+.pick-chip .add:disabled{color:var(--mute);background:var(--chip);cursor:default}
 .heat{border-collapse:collapse;font-size:11px}
 .heat th,.heat td{padding:4px 7px;text-align:center;font-variant-numeric:tabular-nums;border:1px solid var(--line)}
 .heat th{color:var(--mute);font-weight:500}
@@ -440,6 +478,7 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
       <button class="nav-item active" data-panel="home" onclick="nav('home',this)"><span>대시보드</span></button>
       <button class="nav-item" data-panel="reports" onclick="nav('reports',this)"><span>분석 보고서</span><span class="nav-count" id="badge-reports">0</span></button>
       <button class="nav-item" data-panel="news" onclick="nav('news',this)"><span>뉴스 피드</span><span class="nav-count" id="badge-news">0</span></button>
+      <button class="nav-item" data-panel="outlook" onclick="nav('outlook',this)"><span>시장 전망</span></button>
       <button class="nav-item" data-panel="finance" onclick="nav('finance',this)"><span>내 자산</span></button>
     </div>
     <div class="nav-group">
@@ -509,6 +548,7 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
     </div>
 
     <div class="home-col home-rail">
+      <div id="home-outlook" class="box" style="display:none;cursor:pointer" onclick="nav('outlook')"></div>
       <div id="brief-banner">
         <div class="rail-banner">
           <div style="flex:1">
@@ -586,6 +626,28 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
   </div>
   <div class="card-grid news" id="news-cards">
     <div class="empty"><div class="empty-icon">—</div>수집된 뉴스가 없습니다.</div>
+  </div>
+</div>
+
+<!-- ── 시장 전망 ── -->
+<div class="panel" id="panel-outlook">
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div id="ol-regime"></div>
+    <div class="box">
+      <div class="box-head">
+        <span class="box-title">섹터 순위</span>
+        <span class="box-sub" id="ol-sec-meta">S&amp;P 500 대비 상대 강도</span>
+        <button class="btn btn-link" onclick="loadOutlook(true)">새로고침</button>
+      </div>
+      <div id="ol-sectors" class="box-body">
+        <div style="font-size:12px;color:var(--mute)"><span class="spin"></span> 섹터 스캔 중…</div>
+      </div>
+    </div>
+    <div class="box">
+      <div class="box-head"><span class="box-title">유망 분야 · 대표 종목</span><span class="box-sub">종합 점수 상위</span></div>
+      <div id="ol-picks" class="box-body-flush"></div>
+    </div>
+    <div class="pa-hint" style="padding:0 2px">모든 판정은 최근 1년 가격 데이터의 모멘텀·추세·상대강도를 알고리즘으로 계산한 것이며, 투자 자문이 아닙니다.</div>
   </div>
 </div>
 
@@ -920,7 +982,7 @@ let _stockSel = null;         // {ticker, market} — 홈 중앙 차트 선택 �
 let _stockRange = '3개월';
 
 const pageTitles = {
-  home:'대시보드', reports:'분석 보고서', news:'뉴스 피드',
+  home:'대시보드', reports:'분석 보고서', news:'뉴스 피드', outlook:'시장 전망',
   finance:'내 자산 관리', watchlist:'관심종목 관리',
   apikeys:'API 키 설정', settings:'스케줄러 설정',
 };
@@ -989,7 +1051,7 @@ function showTip(el){
 function hideTip(){ if (_tipEl) _tipEl.style.display = 'none'; }
 
 /* ── 네비게이션 ── */
-const PANELS = ['home','reports','news','finance','watchlist','apikeys','settings'];
+const PANELS = ['home','reports','news','outlook','finance','watchlist','apikeys','settings'];
 function nav(name, btn){
   if (!PANELS.includes(name)) name = 'home';
   _panel = name;
@@ -1007,12 +1069,29 @@ window.addEventListener('hashchange', () => {
   if (PANELS.includes(h) && h !== _panel) nav(h);
 });
 function refreshCurrent(){
-  ({ home:refreshHome, reports:loadReports, news:loadNews, finance:loadFinance,
+  ({ home:refreshHome, reports:loadReports, news:loadNews, outlook:loadOutlook, finance:loadFinance,
      watchlist:loadWatchlist, apikeys:loadApiKeys, settings:loadSchedulerStatus }[_panel] || (()=>{}))();
 }
 
 /* ══ 홈 ══════════════════════════════════════════════════════════════════ */
-async function refreshHome(){ await Promise.all([loadHomeData(), loadHomeNews()]); }
+async function refreshHome(){ await Promise.all([loadHomeData(), loadHomeNews(), loadHomeOutlook()]); }
+
+async function loadHomeOutlook(){
+  const el = document.getElementById('home-outlook');
+  try {
+    const d = await api('/api/market/outlook');
+    if (!d.ok || !d.regime){ el.style.display = 'none'; return; }
+    const r = d.regime, top = (d.sectors || []).slice(0, 3).map(s => s.name).join(' · ');
+    el.style.display = '';
+    el.className = 'box';
+    el.innerHTML = `
+      <div class="ol-regime ol-${r.tone}" style="border-radius:14px;border:none">
+        <div class="lbl">시장 국면 <span style="opacity:.6">›</span></div>
+        <div class="val" style="font-size:16px">${esc(r.label)}</div>
+        <div style="font-size:11px;margin-top:3px;opacity:.85">유망 분야: ${esc(top || '—')}</div>
+      </div>`;
+  } catch { el.style.display = 'none'; }
+}
 
 let _macroPollTimer = null;
 async function loadHomeData(){
@@ -1595,6 +1674,73 @@ function renderNewsCards(){
       </div>
     </div>`;
   }).join('');
+}
+
+/* ══ 시장 전망 (섹터 로테이션 + 종목 추천) ══════════════════════════════ */
+let _outlookLoaded = false;
+async function loadOutlook(force){
+  const secEl = document.getElementById('ol-sectors');
+  if (!force && _outlookLoaded) return;
+  document.getElementById('ol-regime').innerHTML = `<div class="ol-regime ol-mid"><div class="lbl">시장 국면</div><div class="val" style="font-size:15px"><span class="spin"></span> 분석 중…</div></div>`;
+  secEl.innerHTML = `<div style="font-size:12px;color:var(--mute)"><span class="spin"></span> 11개 섹터 ETF 스캔 중… (최대 5초)</div>`;
+  try {
+    const d = await api('/api/market/outlook' + (force ? '?refresh=true' : ''));
+    _outlookLoaded = true;
+    if (!d.ok){ secEl.innerHTML = `<div class="empty" style="color:var(--mute)">${esc(d.reason || '분석할 수 없습니다.')}</div>`; return; }
+    renderOutlook(d);
+  } catch(e){ secEl.innerHTML = `<div class="empty" style="color:var(--up)">실패: ${esc(e.message)}</div>`; }
+}
+const GRADE_TONE = { 유망:'good', 관심:'mid', 중립:'warn', 주의:'bad' };
+function renderOutlook(d){
+  const r = d.regime;
+  const spx = d.spx;
+  document.getElementById('ol-regime').innerHTML = `
+    <div class="ol-regime ol-${r.tone}">
+      <div class="lbl">현재 시장 국면 · ${esc(d.as_of)}</div>
+      <div class="val">${esc(r.label)}</div>
+      <div class="guide">💡 ${esc(r.guide)}</div>
+      <ul>${r.reasons.map(x => `<li><span>·</span><span>${esc(x)}</span></li>`).join('')}</ul>
+      <div style="font-size:10.5px;opacity:.75;margin-top:8px;font-variant-numeric:tabular-nums">
+        S&P 500 — 1개월 ${fmtPct(spx.ret_1m)} · 3개월 ${fmtPct(spx.ret_3m)} · 6개월 ${fmtPct(spx.ret_6m)} · 200일선 ${spx.above_ma200 ? '위 ▲' : '아래 ▼'}${d.breadth != null ? ` · 상승 섹터 ${Math.round(d.breadth * 100)}%` : ''}
+      </div>
+    </div>`;
+
+  const maxAbs = Math.max(...d.sectors.map(s => Math.abs(s.rel_strength)), 5);
+  document.getElementById('ol-sectors').innerHTML = d.sectors.map(s => {
+    const w = Math.max(4, Math.min(100, 50 + s.rel_strength / maxAbs * 50));
+    const col = s.rel_strength >= 0 ? 'var(--up)' : 'var(--accent-strong)';
+    return `<div class="sec-row">
+      <div><div class="sec-name">${esc(s.name)}</div><span class="grade grade-${s.tone}">${esc(s.grade)} ${s.score.toFixed(0)}</span></div>
+      <div class="sec-track"><i style="width:${w.toFixed(0)}%;background:${col}"></i></div>
+      <div class="sec-nums">3M ${fmtPct(s.ret_3m)}<br><span style="color:${col}">vs 시장 ${s.rel_strength >= 0 ? '+' : ''}${s.rel_strength}</span></div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('ol-picks').innerHTML = d.picks.map(p => `
+    <div class="pick-group">
+      <div class="pick-head"><span class="grade grade-${p.tone}">${esc(p.grade)}</span><span class="n">${esc(p.name)}</span><span style="font-size:10.5px;color:var(--mute)">섹터 점수 ${p.score.toFixed(0)}</span></div>
+      <div class="pick-stocks">${p.stocks.map(x => `
+        <div class="pick-chip">
+          <span class="tk">${esc(x.ticker)} <span class="grade grade-${x.tone}" style="font-size:9px">${x.score.toFixed(0)}</span></span>
+          <span class="mt">3M ${fmtPct(x.ret_3m)} · 시장 대비 ${x.rel_strength >= 0 ? '+' : ''}${x.rel_strength}</span>
+          <button class="add" onclick="quickAddStock('${esc(x.ticker)}',this)">+ 관심종목</button>
+        </div>`).join('')}</div>
+    </div>`).join('');
+}
+function fmtPct(v){ return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }
+async function quickAddStock(ticker, btn){
+  if (btn){ btn.disabled = true; btn.textContent = '조회 중…'; }
+  let name = ticker;
+  try { const d = await api(`/api/stock-info/${encodeURIComponent(ticker)}?market=US`); name = d.name || ticker; } catch {}
+  try {
+    await api('/api/watchlist', { method:'POST', body: JSON.stringify({ ticker, market:'US', name }) });
+    toast(`${ticker} 관심종목 추가됨`);
+    if (btn){ btn.textContent = '추가됨 ✓'; }
+    _pfMap = {}; _paLoaded = false;
+  } catch(e){
+    toast(e.message === 'Already exists' ? `${ticker}는 이미 목록에 있습니다` : e.message, 'err');
+    if (btn){ btn.disabled = false; btn.textContent = '+ 관심종목'; }
+  }
 }
 
 /* ══ 관심종목 ═════════════════════════════════════════════════════════════ */

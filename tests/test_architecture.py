@@ -40,7 +40,7 @@ def _layer(path: Path) -> int:
     parts = rel.parts
     if parts[0] == "config.py":
         return 0
-    if parts[0] == "core" and len(parts) > 1 and parts[1] in ("formulas.py", "quant.py"):
+    if parts[0] == "core" and len(parts) > 1 and parts[1] in ("formulas.py", "quant.py", "market_scan.py"):
         return 1
     if parts[0] == "db":
         return 2
@@ -91,7 +91,7 @@ def _module_to_layer(module: str) -> int:
     """Map an app.* module string to its layer number."""
     if module == "app.config":
         return 0
-    if module in ("app.core.formulas", "app.core.quant"):
+    if module in ("app.core.formulas", "app.core.quant", "app.core.market_scan"):
         return 1
     if module.startswith("app.db"):
         return 2

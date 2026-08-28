@@ -1681,6 +1681,143 @@ async def run_backtest(body: BacktestReq) -> dict:
     }
 
 
+# ── 시장 전망 (섹터 로테이션 + 종목 추천) ────────────────────────────────────
+
+_SECTOR_ETFS = {
+    "XLK": "기술", "XLC": "커뮤니케이션", "XLY": "임의소비재", "XLP": "필수소비재",
+    "XLV": "헬스케어", "XLF": "금융", "XLI": "산업재", "XLE": "에너지",
+    "XLB": "소재", "XLRE": "부동산", "XLU": "유틸리티",
+}
+_SECTOR_STOCKS = {
+    "XLK": ["AAPL", "MSFT", "NVDA", "AVGO"],
+    "XLC": ["GOOGL", "META", "NFLX"],
+    "XLY": ["AMZN", "TSLA", "HD", "MCD"],
+    "XLP": ["PG", "KO", "COST", "WMT"],
+    "XLV": ["LLY", "UNH", "JNJ", "ABBV"],
+    "XLF": ["JPM", "V", "MA", "BAC"],
+    "XLI": ["GE", "CAT", "HON", "RTX"],
+    "XLE": ["XOM", "CVX", "COP"],
+    "XLB": ["LIN", "SHW", "FCX"],
+    "XLRE": ["PLD", "AMT", "EQIX"],
+    "XLU": ["NEE", "SO", "DUK"],
+}
+
+_outlook_cache: dict = {"data": None, "ts": 0.0}
+_OUTLOOK_TTL = 3600  # 1시간
+
+
+def _compute_outlook() -> dict:
+    import yfinance as yf
+
+    from app.core import market_scan as ms
+
+    stocks = sorted({s for lst in _SECTOR_STOCKS.values() for s in lst})
+    syms = ["SPY", *_SECTOR_ETFS.keys(), *stocks]
+
+    try:
+        df = yf.download(
+            syms, period="1y", progress=False, group_by="ticker",
+            threads=True, auto_adjust=True,
+        )
+    except Exception as e:
+        logger.warning("outlook batch download failed: %s", e)
+        return {"ok": False, "reason": "시세를 불러오지 못했습니다."}
+
+    multi = hasattr(df.columns, "levels")
+
+    def closes(sym: str) -> list[float]:
+        try:
+            s = (df[sym]["Close"] if multi else df["Close"]).dropna()
+            return [float(x) for x in s.tolist()]
+        except Exception:
+            return []
+
+    spx_c = closes("SPY")
+    if len(spx_c) < 60:
+        return {"ok": False, "reason": "지수 데이터가 부족합니다."}
+    spx_mp = ms.momentum_profile(spx_c)
+
+    sectors = []
+    for etf, name in _SECTOR_ETFS.items():
+        c = closes(etf)
+        if len(c) < 60:
+            continue
+        mp = ms.momentum_profile(c)
+        rs = ms.relative_strength(c, spx_c)
+        score = ms.trend_score(mp, rs)
+        grade, tone = ms.score_label(score)
+        sectors.append({
+            "etf": etf, "name": name, "score": score, "grade": grade, "tone": tone,
+            "ret_1m": mp["ret_1m"], "ret_3m": mp["ret_3m"], "ret_6m": mp["ret_6m"],
+            "rel_strength": rs, "rsi": mp["rsi"],
+            "above_ma200": mp["above_ma200"],
+        })
+    sectors.sort(key=lambda s: s["score"], reverse=True)
+
+    breadth = None
+    if sectors:
+        breadth = round(
+            sum(1 for s in sectors if s["above_ma200"]) / len(sectors), 2
+        )
+
+    macro = _get_macro_cached()
+    cape = (macro.get("cape") or {}).get("value")
+    vix = (macro.get("vix") or {}).get("price")
+    tnx = (macro.get("bonds_10y") or {}).get("price")
+    regime = ms.market_regime(cape, vix, tnx, spx_mp, breadth)
+
+    # 상위 섹터의 대표 종목 추천
+    picks = []
+    for sec in sectors[:3]:
+        cand = []
+        for tk in _SECTOR_STOCKS.get(sec["etf"], []):
+            c = closes(tk)
+            if len(c) < 60:
+                continue
+            mp = ms.momentum_profile(c)
+            rs = ms.relative_strength(c, spx_c)
+            sc = ms.trend_score(mp, rs)
+            grade, tone = ms.score_label(sc)
+            cand.append({
+                "ticker": tk, "score": sc, "grade": grade, "tone": tone,
+                "ret_3m": mp["ret_3m"], "rel_strength": rs, "rsi": mp["rsi"],
+            })
+        cand.sort(key=lambda x: x["score"], reverse=True)
+        picks.append({
+            "etf": sec["etf"], "name": sec["name"], "score": sec["score"],
+            "grade": sec["grade"], "tone": sec["tone"], "stocks": cand[:3],
+        })
+
+    return {
+        "ok": True,
+        "as_of": date.today().isoformat(),
+        "regime": regime,
+        "spx": {
+            "ret_1m": spx_mp["ret_1m"], "ret_3m": spx_mp["ret_3m"],
+            "ret_6m": spx_mp["ret_6m"], "above_ma200": spx_mp["above_ma200"],
+            "rsi": spx_mp["rsi"],
+        },
+        "breadth": breadth,
+        "sectors": sectors,
+        "picks": picks,
+    }
+
+
+@app.get("/api/market/outlook")
+async def market_outlook(refresh: bool = False) -> dict:
+    """현재 시장 국면 + 섹터 순위 + 유망 분야별 대표 종목."""
+    import time
+
+    now = time.time()
+    if not refresh and _outlook_cache["data"] and now - _outlook_cache["ts"] < _OUTLOOK_TTL:
+        return _outlook_cache["data"]
+    data = _compute_outlook()
+    if data.get("ok"):
+        _outlook_cache["data"] = data
+        _outlook_cache["ts"] = now
+    return data
+
+
 # ── API 키 설정 ────────────────────────────────────────────────────────────────
 
 def _mask_key(key: str) -> str:
