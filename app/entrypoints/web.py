@@ -116,6 +116,7 @@ async def add_to_watchlist(body: WatchlistCreate) -> dict:
         row = Watchlist(ticker=body.ticker.upper(), name=body.name, market=body.market.upper())
         session.add(row)
         session.commit()
+        _bust_market_caches()
         return {"ticker": row.ticker, "market": row.market, "name": row.name}
 
 
@@ -137,6 +138,7 @@ async def update_holding(ticker: str, body: HoldingUpdate) -> dict:
         row.quantity = body.quantity
         row.avg_price = body.avg_price
         session.commit()
+        _bust_market_caches()
         return {"ticker": row.ticker, "market": row.market,
                 "quantity": row.quantity, "avg_price": row.avg_price}
 
@@ -151,6 +153,7 @@ async def remove_from_watchlist(ticker: str, market: str = "US") -> dict:
             raise HTTPException(status_code=404, detail="Not found")
         session.delete(row)
         session.commit()
+        _bust_market_caches()
         return {"deleted": ticker}
 
 
@@ -1136,9 +1139,16 @@ def _batch_prices(items: list[tuple]) -> dict:
     return px
 
 
+def _bust_market_caches() -> None:
+    """관심종목·보유수량 변경 시 시세/분석 캐시를 무효화 (다음 조회에서 재계산)."""
+    _portfolio_cache["data"] = []
+    _portfolio_cache["ts"] = 0.0
+    _analytics_cache.clear()
+
+
 @app.get("/api/portfolio")
 async def get_portfolio(refresh: bool = False) -> list[dict]:
-    """보유 종목 현재 평가금액 + 배당 정보. 모든 금액은 원화(KRW) 기준."""
+    """관심종목 전체의 현재가·스파크라인·배당 + (보유 시) 평가금액. 원화(KRW) 기준."""
     import time
     now = time.time()
     if not refresh and now - _portfolio_cache["ts"] < _PORTFOLIO_TTL and _portfolio_cache["data"]:
@@ -1148,7 +1158,7 @@ async def get_portfolio(refresh: bool = False) -> list[dict]:
     usd_krw = _macro_cache.get("data", {}).get("usd_krw", {}).get("price") or 1380.0
 
     with _session() as session:
-        rows = session.query(Watchlist).filter(Watchlist.quantity > 0).all()
+        rows = session.query(Watchlist).all()   # 미보유(수량 0) 종목도 현재가는 채운다
         items = [
             (r.ticker, r.market, r.name, float(r.quantity or 0), float(r.avg_price or 0))
             for r in rows
@@ -1205,8 +1215,8 @@ async def get_portfolio(refresh: bool = False) -> list[dict]:
         div_rate = pd_data["dividend_rate"]   # 주당 연간 배당 (현지통화)
         div_rate_krw = round(div_rate * usd_krw) if (div_rate and market == "US") else div_rate
 
-        curr_val = round(price_krw * qty) if price_krw else None
-        cost = round(avg_p * qty) if avg_p else None
+        curr_val = round(price_krw * qty) if (price_krw and qty > 0) else None
+        cost = round(avg_p * qty) if (avg_p and qty > 0) else None
         gl = round(curr_val - cost) if (curr_val is not None and cost) else None
         gl_pct = round(gl / cost * 100, 2) if (gl is not None and cost) else None
 

@@ -1629,6 +1629,15 @@ function openHoldingForm(ticker, market, qty, avgP){
   document.getElementById('h-qty').focus();
 }
 function closeHoldingForm(){ document.getElementById('holding-form').style.display = 'none'; _holdingTarget = null; }
+// 관심종목/보유수량 변경 후 관련 화면·캐시를 모두 새로고침
+function afterWatchlistChange(){
+  _pfMap = {};
+  _paLoaded = false;
+  loadWatchlist();
+  if (_panel === 'home') loadHomeData();
+  if (_panel === 'finance'){ loadPortfolio(true); loadAnalytics(true); loadNetworthTrend(); }
+}
+
 async function saveHolding(){
   if (!_holdingTarget) return;
   const qty = parseFloat(document.getElementById('h-qty').value) || 0;
@@ -1640,8 +1649,7 @@ async function saveHolding(){
     });
     toast(`${_holdingTarget.ticker} 보유 수량 저장됨 (${qty}주)`);
     closeHoldingForm();
-    loadWatchlist();
-    if (document.getElementById('panel-finance').classList.contains('active')) loadPortfolio(true);
+    afterWatchlistChange();
   } catch(e){ toast(e.message, 'err'); }
 }
 function onTickerInput(){
@@ -1674,7 +1682,7 @@ async function addStock(){
     document.getElementById('f-ticker').value = '';
     document.getElementById('f-name').value = '';
     document.getElementById('name-status').textContent = '';
-    loadWatchlist();
+    afterWatchlistChange();
   } catch(e){
     toast(e.message === 'Already exists' ? `${ticker}는 이미 목록에 있습니다` : e.message, 'err');
   } finally { document.getElementById('btn-add').disabled = false; }
@@ -1684,8 +1692,7 @@ async function removeStock(ticker, market, name){
   try {
     await api(`/api/watchlist/${ticker}?market=${market}`, { method:'DELETE' });
     toast(`${ticker} 삭제됨`);
-    loadWatchlist();
-    if (_panel === 'home') loadHomeData();
+    afterWatchlistChange();
   } catch(e){ toast(e.message, 'err'); }
 }
 
