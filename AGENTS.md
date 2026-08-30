@@ -65,7 +65,7 @@ app/core/agents/chief_advisor.py — ChiefAdvisor (opus)
 app/core/pipeline.py             — analyze_stock() + morning_brief()
 app/entrypoints/cli.py           — Typer CLI
 app/entrypoints/web.py           — FastAPI + 브리핑 HTML
-app/entrypoints/scheduler.py     — APScheduler (KST 07:00 + 감시 루프)
+app/entrypoints/scheduler.py     — APScheduler (KST 10:30 + 감시 루프)
 ```
 
 ## Agent Pipeline

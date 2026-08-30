@@ -553,7 +553,7 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
         <div class="rail-banner">
           <div style="flex:1">
             <div style="font-size:12px;font-weight:500">오늘의 브리핑</div>
-            <div style="font-size:11px;color:var(--sub);margin-top:1px">미생성 — KST 07:00 자동 실행 또는 수동 실행</div>
+            <div style="font-size:11px;color:var(--sub);margin-top:1px">미생성 — KST 10:30 자동 실행 또는 수동 실행</div>
           </div>
           <button class="btn btn-primary btn-xs" id="btn-brief-home" onclick="runBrief()">실행</button>
         </div>
@@ -1502,7 +1502,7 @@ function renderBriefBanner(briefId, today){
     el.innerHTML = `<div class="rail-banner" style="border-left-color:var(--mute)">
       <div style="flex:1">
         <div style="font-size:12px;font-weight:500">오늘의 브리핑</div>
-        <div style="font-size:11px;color:var(--sub);margin-top:1px">미생성 — KST 07:00 자동 실행 또는 수동 실행</div>
+        <div style="font-size:11px;color:var(--sub);margin-top:1px">미생성 — KST 10:30 자동 실행 또는 수동 실행</div>
       </div>
       <button class="btn btn-primary btn-xs" id="btn-brief-home" onclick="runBrief()">실행</button>
     </div>`;
@@ -2040,7 +2040,7 @@ async function loadSchedulerStatus(){
   try {
     const d = await api('/api/scheduler/status');
     if (!d.running){ el.innerHTML = '<span style="color:var(--accent-strong)">스케줄러 미실행</span>'; return; }
-    const labels = { morning_brief:'모닝 브리핑 (KST 07:00)', news_watcher_noon:'뉴스 감시 (KST 12:00)', news_watcher_evening:'뉴스 감시 (KST 18:00)', news_cleanup:'뉴스 정리 (KST 03:00)', prewarm_caches:'시세 캐시 예열 (12분)' };
+    const labels = { morning_brief:'모닝 브리핑 (KST 10:30)', news_watcher_noon:'뉴스 감시 (KST 12:00)', news_watcher_evening:'뉴스 감시 (KST 18:00)', news_cleanup:'뉴스 정리 (KST 03:00)', prewarm_caches:'시세 캐시 예열 (12분)' };
     el.innerHTML = d.jobs.map(j => {
       const next = j.next_run_kst ? new Date(j.next_run_kst).toLocaleString('ko-KR') : '—';
       const sbrf = document.getElementById('sidebar-next-brief');

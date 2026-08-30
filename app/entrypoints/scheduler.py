@@ -377,10 +377,10 @@ def start_scheduler() -> BackgroundScheduler:
         coalesce=True,
     )
 
-    # Morning brief: KST 07:00
+    # Morning brief: KST 10:30 (미국 장 마감 반영 + 한국 장 개장 후)
     _scheduler.add_job(
         _run_morning_brief,
-        trigger=CronTrigger(hour=7, minute=0, timezone=KST),
+        trigger=CronTrigger(hour=10, minute=30, timezone=KST),
         id="morning_brief",
         replace_existing=True,
     )
@@ -409,7 +409,7 @@ def start_scheduler() -> BackgroundScheduler:
 
     _scheduler.start()
     logger.info(
-        "Scheduler started. Brief: KST 07:00 | Watcher: KST 12:00, 18:00 | Cleanup: KST 03:00",
+        "Scheduler started. Brief: KST 10:30 | Watcher: KST 12:00, 18:00 | Cleanup: KST 03:00",
     )
     return _scheduler
 

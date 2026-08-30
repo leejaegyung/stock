@@ -424,7 +424,7 @@ CMD ["uvicorn", "entrypoints.web:app", "--host", "0.0.0.0", "--port", "8000"]
 ### 9.3 운용
 
 - **DB 영속화**: 볼륨 마운트로 SQLite 파일을 컨테이너 밖에 저장 → `-v ./data:/app/data`
-- **상시 동작**: 스케줄러(APScheduler)가 컨테이너 안에서 계속 돌며 아침 브리핑(KST 07:00)과 감시 루프(§5.5, N분 간격)를 실행.
+- **상시 동작**: 스케줄러(APScheduler)가 컨테이너 안에서 계속 돌며 아침 브리핑(KST 10:30)과 감시 루프(§5.5, N분 간격)를 실행.
 - **수동 실행**: 필요 시 CLI로 `docker compose exec app python -m entrypoints.cli analyze NVDA` 처럼 개별 분석.
 - **백업**: `data/` 디렉터리 파일 복사만으로 완료.
 - **환경변수**: Claude API 키, 각 데이터소스 API 키는 `.env`로 주입 (`--env-file`).
