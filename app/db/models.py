@@ -44,6 +44,9 @@ class NewsItem(Base):
     market = Column(String, nullable=False)
     headline = Column(String)
     summary = Column(Text)
+    headline_ko = Column(String)      # 자동 번역된 헤드라인 (외신만)
+    summary_ko = Column(Text)         # 자동 번역된 요약
+    lang = Column(String)             # 'ko' | 'en' | 'unknown' — 원문 언어
     impact = Column(String)  # '촉매' | '중립' | '저해'
     source = Column(String)
     url = Column(String, default="")
@@ -139,6 +142,9 @@ def create_all_tables(db_path: str) -> None:
             "ALTER TABLE user_api_key ADD COLUMN is_active INTEGER DEFAULT 0",
             "ALTER TABLE ledger_transaction ADD COLUMN source_recurring_id INTEGER DEFAULT NULL",
             "ALTER TABLE analysis_report ADD COLUMN metrics_json TEXT DEFAULT ''",
+            "ALTER TABLE news_item ADD COLUMN headline_ko TEXT",
+            "ALTER TABLE news_item ADD COLUMN summary_ko TEXT",
+            "ALTER TABLE news_item ADD COLUMN lang TEXT",
         ]
         for sql in migrations:
             try:

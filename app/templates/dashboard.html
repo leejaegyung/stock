@@ -1157,7 +1157,7 @@ function newsRowHtml(n){
       <span class="news-time">${esc(n.published_at)}</span>
     </div>
     <div>${hl}</div>
-    ${n.source ? `<div class="news-time">${esc(n.source)}</div>` : ''}
+    ${n.source ? `<div class="news-time">${esc(n.source)}${n.translated ? ' · 🌐 자동번역' : ''}</div>` : ''}
   </div>`;
 }
 
@@ -1683,13 +1683,18 @@ function renderNewsCards(){
   el.innerHTML = list.map(n => {
     const col = n.impact === '촉매' ? 'var(--up)' : n.impact === '저해' ? 'var(--accent-strong)' : 'var(--line-2)';
     const hasUrl = n.url && n.url.startsWith('http');
+    const trBadge = n.translated
+      ? `<span title="기계 번역본 — 원문과 뉘앙스가 다를 수 있습니다" style="font-size:9px;font-weight:600;color:var(--accent);background:var(--accent-soft);border-radius:5px;padding:0 4px">🌐 자동번역</span>
+         <button class="news-orig-btn" onclick="toggleNewsOrig(this,${n.id})" style="font-size:9.5px;color:var(--mute);background:none;border:none;cursor:pointer;font-family:inherit;padding:0">원문 보기</button>`
+      : '';
     return `<div class="ncard" style="border-top:2px solid ${col}">
       <div class="ncard-hd">
         <span style="font-size:12px;font-weight:600">${esc(n.ticker)}</span>${mktChip(n.market)}${impactTag(n.impact)}
+        <span style="flex:1"></span>${trBadge}
       </div>
       <div class="ncard-body">
-        ${hasUrl ? `<a class="ncard-hl" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.headline)}</a>` : `<span class="ncard-hl">${esc(n.headline)}</span>`}
-        ${n.summary ? `<div class="ncard-sum">${esc(n.summary)}</div>` : ''}
+        ${hasUrl ? `<a class="ncard-hl nc-hl" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.headline)}</a>` : `<span class="ncard-hl nc-hl">${esc(n.headline)}</span>`}
+        ${n.summary ? `<div class="ncard-sum nc-sum">${esc(n.summary)}</div>` : ''}
       </div>
       <div class="ncard-foot">
         <span class="meta">${esc(n.published_at)}${n.source ? ' · ' + esc(n.source) : ''}</span>
@@ -1697,6 +1702,16 @@ function renderNewsCards(){
       </div>
     </div>`;
   }).join('');
+}
+function toggleNewsOrig(btn, id){
+  const n = _newsAll.find(x => x.id === id);
+  const card = btn.closest('.ncard');
+  if (!n || !card) return;
+  const en = btn.textContent === '원문 보기';
+  const hl = card.querySelector('.nc-hl'), sm = card.querySelector('.nc-sum');
+  if (hl) hl.textContent = en ? (n.headline_orig || n.headline) : n.headline;
+  if (sm) sm.textContent = en ? (n.summary_orig || n.summary || '') : (n.summary || '');
+  btn.textContent = en ? '번역 보기' : '원문 보기';
 }
 
 /* ══ 시장 전망 (섹터 로테이션 + 종목 추천) ══════════════════════════════ */

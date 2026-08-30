@@ -330,6 +330,18 @@ def _prewarm_caches() -> None:
         logger.warning("prewarm failed: %s", e)
 
 
+def _translate_news_job() -> None:
+    """번역 안 된 외신 뉴스를 한국어로 채운다 (LLM 미사용, 자체 번역 워크플로우)."""
+    try:
+        from app.entrypoints.web import _translate_pending_news
+
+        n = _translate_pending_news(max_items=25)
+        if n:
+            logger.info("translated %d foreign news items", n)
+    except Exception as e:
+        logger.warning("news translation job failed: %s", e)
+
+
 def start_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler and _scheduler.running:
@@ -343,6 +355,17 @@ def start_scheduler() -> BackgroundScheduler:
         trigger=IntervalTrigger(minutes=12),
         id="prewarm_caches",
         next_run_time=datetime.now(KST) + timedelta(seconds=3),
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # 외신 뉴스 한국어 번역: 시작 20초 후 + 이후 6분마다 (밀린 것 25건씩 처리)
+    _scheduler.add_job(
+        _translate_news_job,
+        trigger=IntervalTrigger(minutes=6),
+        id="translate_news",
+        next_run_time=datetime.now(KST) + timedelta(seconds=20),
         replace_existing=True,
         max_instances=1,
         coalesce=True,

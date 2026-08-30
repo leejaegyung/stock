@@ -54,8 +54,25 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 async def lifespan(application: FastAPI):
     create_all_tables(settings.db_path)
     start_scheduler()
+    _kick_news_backfill()
     yield
     stop_scheduler()
+
+
+def _kick_news_backfill() -> None:
+    """기동 시 밀린 외신 뉴스 번역을 백그라운드로 몰아서 처리 (요청 블로킹 없음)."""
+    import threading
+
+    def _run():
+        try:
+            for _ in range(12):  # 최대 12배치 × 25건
+                n = _translate_pending_news(max_items=25)
+                if n == 0:
+                    break
+        except Exception as e:
+            logger.warning("news backfill failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 app = FastAPI(title="Stock Analyst Service", lifespan=lifespan)
@@ -704,10 +721,50 @@ async def home_data() -> dict:
     }
 
 
+def _translate_pending_news(max_items: int = 25) -> int:
+    """번역 안 된 외신 뉴스를 한국어로 채운다. 번역 건수 반환.
+
+    한국어 원문은 lang='ko' 로 확정, 번역 실패분은 lang 을 비워둬 다음 주기에 재시도.
+    """
+    from sqlalchemy import or_
+
+    from app.core.translate import detect_lang, translate_to_ko
+
+    done = 0
+    with _session() as session:
+        rows = (
+            session.query(NewsItem)
+            .filter(or_(NewsItem.lang.is_(None), NewsItem.lang == ""))
+            .order_by(NewsItem.published_at.desc())
+            .limit(max_items)
+            .all()
+        )
+        for r in rows:
+            head = (r.headline or "").strip()
+            if not head:
+                r.lang = "unknown"
+                continue
+            if detect_lang(head) == "ko":
+                r.lang = "ko"
+                continue
+            hk, ok1 = translate_to_ko(head)
+            sk, ok2 = translate_to_ko(r.summary or "") if r.summary else ("", False)
+            if ok1:
+                r.headline_ko = hk
+                r.summary_ko = sk if ok2 else r.summary_ko
+                r.lang = "en"
+                done += 1
+            # 실패 시 lang 그대로(None) → 다음 주기에 재시도
+        session.commit()
+    return done
+
+
 @app.get("/api/news")
 async def recent_news(limit: int = 20) -> list[dict]:
-    """최근 뉴스 아이템 목록."""
-    from app.db.models import NewsItem
+    """
+    최근 뉴스 — 외신은 한국어 번역본 우선, 원문 링크·원문 텍스트 함께 제공.
+    번역은 스케줄러(6분 주기)와 기동 시 백필이 채운다 — 이 응답은 DB만 읽는다.
+    """
     with _session() as session:
         rows = (
             session.query(NewsItem)
@@ -720,8 +777,12 @@ async def recent_news(limit: int = 20) -> list[dict]:
                 "id": r.id,
                 "ticker": r.ticker,
                 "market": r.market,
-                "headline": r.headline,
-                "summary": r.summary,
+                "headline": r.headline_ko or r.headline,
+                "summary": r.summary_ko or r.summary,
+                "headline_orig": r.headline,
+                "summary_orig": r.summary,
+                "translated": bool(r.headline_ko),
+                "lang": r.lang or "",
                 "impact": r.impact,
                 "source": r.source,
                 "url": r.url or "",
