@@ -279,10 +279,13 @@ def _auto_apply_recurring() -> None:
     logger.info("고정거래 자동 적용: %d건 (%04d-%02d)", count, year, month)
 
 
+NEWS_RETENTION_DAYS = 7
+
+
 def _cleanup_old_news() -> None:
-    """2주(14일) 지난 뉴스 항목을 DB에서 삭제."""
+    """보관 기간(NEWS_RETENTION_DAYS) 지난 뉴스 항목을 DB에서 삭제."""
     from datetime import timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=NEWS_RETENTION_DAYS)
     create_all_tables(settings.db_path)
     factory = get_session_factory(settings.db_path)
     with factory() as session:
@@ -293,7 +296,7 @@ def _cleanup_old_news() -> None:
         )
         session.commit()
     if deleted:
-        logger.info("Cleanup: deleted %d news items older than 14 days", deleted)
+        logger.info("Cleanup: deleted %d news items older than %d days", deleted, NEWS_RETENTION_DAYS)
 
 
 def _prewarm_caches() -> None:
@@ -396,7 +399,7 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
 
-    # Old news cleanup: KST 03:00 매일 (14일 이상 된 기사 삭제)
+    # Old news cleanup: KST 03:00 매일 (NEWS_RETENTION_DAYS 이상 된 기사 삭제)
     _scheduler.add_job(
         _cleanup_old_news,
         trigger=CronTrigger(hour=3, minute=0, timezone=KST),
