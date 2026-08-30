@@ -1476,7 +1476,7 @@ async def price_history(ticker: str, market: str = "US", range: str = "3개월")
         for idx, (dt, r) in enumerate(wdf.iterrows()):
             rows.append(
                 {
-                    "d": dt.strftime("%m-%d"),
+                    "d": dt.strftime("%Y-%m-%d"),
                     "o": round(float(r["Open"]), 4),
                     "h": round(float(r["High"]), 4),
                     "l": round(float(r["Low"]), 4),

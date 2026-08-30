@@ -1396,23 +1396,46 @@ function renderStockDetail(h, pf, target, market){
   const grid = [0.25,0.5,0.75].map(f => `<line x1="0" y1="${(H*f).toFixed(0)}" x2="${W}" y2="${(H*f).toFixed(0)}" stroke="var(--line)" stroke-width="1"/>`).join('');
   const tgtLine = (target != null && target > 0)
     ? `<line x1="0" y1="${y(target)}" x2="${W}" y2="${y(target)}" stroke="var(--up)" stroke-width="1" stroke-dasharray="5 5"/>` : '';
+
+  // ── x축 날짜 눈금 (조회 기간에 맞춰 형식·개수 조정) ──
+  const fmtTick = d => {
+    const p = String(d).split('-').map(Number);
+    if (p.length !== 3) return String(d);
+    const [Y, M, D] = p;
+    if (_stockRange === '전체') return String(Y);
+    if (_stockRange === '1년')  return `${String(Y).slice(2)}.${M}`;
+    return `${M}/${D}`;
+  };
+  const nTick = pts.length > 40 ? 7 : pts.length > 12 ? 5 : Math.min(pts.length, 4);
+  const tickIdx = [...new Set(Array.from({length:nTick}, (_,k) =>
+    Math.round(k * (pts.length - 1) / (nTick - 1))))];
+  const vgrid = tickIdx.map(i =>
+    `<line x1="${x(i)}" y1="0" x2="${x(i)}" y2="${H}" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 4"/>`).join('');
+  const axisLabels = tickIdx.map((i,k) => {
+    const f = i / (pts.length - 1);
+    const pos = k === 0 ? 'left:0'
+              : k === tickIdx.length - 1 ? 'right:0'
+              : `left:${(f*100).toFixed(2)}%;transform:translateX(-50%)`;
+    return `<span style="position:absolute;${pos};white-space:nowrap">${fmtTick(pts[i].d)}</span>`;
+  }).join('');
+
   chEl.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">
       ${grid}
+      ${vgrid}
       <polygon points="${areaPts}" fill="var(--accent-a08)"/>
       <polyline points="${linePts}" fill="none" stroke="${lineCol}" stroke-width="1.6"/>
       ${maPts ? `<polyline points="${maPts}" fill="none" stroke="var(--warn)" stroke-width="1" stroke-dasharray="3 3"/>` : ''}
       ${tgtLine}
     </svg>
+    <div style="position:relative;height:13px;margin-top:3px;font-size:9.5px;color:var(--mute);font-variant-numeric:tabular-nums">${axisLabels}</div>
     <div class="chart-legend">
       <div style="display:flex;gap:10px">
         <span><span style="color:${lineCol}">━</span> 종가</span>
         ${maPts ? '<span><span style="color:var(--warn)">┄</span> MA20</span>' : ''}
         ${target != null && target > 0 ? `<span><span style="color:var(--up)">┄</span> AI 목표가 ${nf(target)}</span>` : ''}
       </div>
-      <div style="display:flex;gap:16px;font-variant-numeric:tabular-nums">
-        <span>${pts[0].d}</span><span>${pts[Math.floor(pts.length/2)].d}</span><span>${pts[pts.length-1].d}</span>
-      </div>
+      <div style="font-variant-numeric:tabular-nums">${pts[0].d} ~ ${pts[pts.length-1].d}</div>
     </div>`;
   const vols = pts.map(p => p.v || 0);
   const vmax = Math.max(...vols, 1);
