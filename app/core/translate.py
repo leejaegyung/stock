@@ -1,9 +1,14 @@
 """
 외신 뉴스 한국어 번역 — LLM 미사용.
 
-전용 기계번역(NMT) 엔드포인트를 백엔드 체인으로 호출한다.
-결과는 web 레이어에서 NewsItem 에 캐시되므로 기사당 1회만 호출된다.
-원문 URL 은 손대지 않는다 — 사용자는 항상 원문으로 이동할 수 있다.
+전용 기계번역(NMT) 백엔드를 순서대로 시도한다:
+  1. DeepL   (DEEPL_API_KEY 설정 시 — 품질·안정성 우수, 무료 50만자/월)
+  2. Google 비공식 gtx 엔드포인트 (키 불필요)
+  3. MyMemory (키 불필요, 한도 빡빡)
+
+무료 엔드포인트는 한도가 있어, 429 를 받으면 `_backoff_until` 까지 전 백엔드
+호출을 건너뛴다. 결과는 web 레이어에서 NewsItem 에 캐시되므로 기사당 1회만 호출.
+원문·원문 URL 은 손대지 않는다.
 
 레이어: 유틸 (app import 없음, httpx + 표준 라이브러리만).
 """
@@ -11,10 +16,16 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_backoff_until = 0.0        # 이 시각까지 무료 엔드포인트 호출 중단
+_last_call = 0.0            # 마지막 호출 시각 (요청 간 최소 간격 확보)
+_MIN_INTERVAL = 1.2        # 초
 
 
 def detect_lang(text: str) -> str:
@@ -29,7 +40,7 @@ def detect_lang(text: str) -> str:
 
 
 def _chunks(text: str, size: int = 1600) -> list[str]:
-    """문장 경계를 존중하며 분할 (번역 엔드포인트 길이 제한 회피)."""
+    """문장 경계를 존중하며 분할."""
     out: list[str] = []
     cur = ""
     for part in text.replace("\n", " ").split(". "):
@@ -44,6 +55,45 @@ def _chunks(text: str, size: int = 1600) -> list[str]:
     return out or [text]
 
 
+def _throttle() -> None:
+    global _last_call
+    wait = _MIN_INTERVAL - (time.time() - _last_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_call = time.time()
+
+
+def _deepl(text: str, src: str) -> str | None:
+    key = os.environ.get("DEEPL_API_KEY", "").strip()
+    if not key:
+        return None
+    host = "api-free.deepl.com" if key.endswith(":fx") else "api.deepl.com"
+    try:
+        r = httpx.post(
+            f"https://{host}/v2/translate",
+            data={"text": text, "source_lang": src.upper(), "target_lang": "KO"},
+            headers={"Authorization": f"DeepL-Auth-Key {key}"},
+            timeout=10.0,
+        )
+        if r.status_code == 200:
+            trs = r.json().get("translations") or []
+            return trs[0]["text"] if trs else None
+        logger.debug("deepl status %s", r.status_code)
+    except Exception as e:
+        logger.debug("deepl failed: %s", e)
+    return None
+
+
+def _mark_backoff(resp: httpx.Response) -> None:
+    global _backoff_until
+    ra = resp.headers.get("Retry-After")
+    secs = 900.0
+    if ra and ra.isdigit():
+        secs = min(6 * 3600, max(300, float(ra)))
+    _backoff_until = time.time() + secs
+    logger.warning("translate backoff %ds (429 from %s)", int(secs), resp.url.host)
+
+
 def _google_gtx(text: str, src: str) -> str | None:
     try:
         r = httpx.get(
@@ -52,12 +102,14 @@ def _google_gtx(text: str, src: str) -> str | None:
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=8.0,
         )
-        if r.status_code == 200:
+        if r.status_code == 429:
+            _mark_backoff(r)
+        elif r.status_code == 200:
             data = r.json()
             joined = "".join(seg[0] for seg in data[0] if seg and seg[0])
             return joined or None
     except Exception as e:
-        logger.debug("gtx translate failed: %s", e)
+        logger.debug("gtx failed: %s", e)
     return None
 
 
@@ -68,28 +120,38 @@ def _mymemory(text: str, src: str) -> str | None:
             params={"q": text[:500], "langpair": f"{src}|ko"},
             timeout=8.0,
         )
-        if r.status_code == 200:
+        if r.status_code == 429:
+            _mark_backoff(r)
+        elif r.status_code == 200:
             t = (r.json().get("responseData") or {}).get("translatedText")
             if t and "MYMEMORY WARNING" not in t.upper():
                 return t
     except Exception as e:
-        logger.debug("mymemory translate failed: %s", e)
+        logger.debug("mymemory failed: %s", e)
     return None
 
 
+def _translate_chunk(text: str, src: str) -> str | None:
+    # DeepL 은 백오프 무관 (별도 한도)
+    res = _deepl(text, src)
+    if res:
+        return res
+    if time.time() < _backoff_until:
+        return None
+    _throttle()
+    return _google_gtx(text, src) or _mymemory(text, src)
+
+
 def translate_to_ko(text: str, src: str = "en") -> tuple[str, bool]:
-    """
-    (번역문, 성공여부). 이미 한국어거나 번역 실패 시 원문을 그대로 돌려준다.
-    """
+    """(번역문, 성공여부). 이미 한국어거나 번역 실패 시 원문 그대로."""
     text = (text or "").strip()
     if not text or detect_lang(text) == "ko":
         return text, False
 
-    parts = _chunks(text)
     pieces: list[str] = []
     ok_any = False
-    for p in parts:
-        res = _google_gtx(p, src) or _mymemory(p, src)
+    for p in _chunks(text):
+        res = _translate_chunk(p, src)
         if res:
             pieces.append(res.strip())
             ok_any = True
@@ -98,3 +160,8 @@ def translate_to_ko(text: str, src: str = "en") -> tuple[str, bool]:
 
     joined = " ".join(x for x in pieces if x).strip()
     return (joined, True) if (ok_any and joined) else (text, False)
+
+
+def backoff_active() -> bool:
+    """무료 엔드포인트가 현재 백오프 중인지 (스케줄러가 헛돌지 않도록)."""
+    return os.environ.get("DEEPL_API_KEY", "").strip() == "" and time.time() < _backoff_until

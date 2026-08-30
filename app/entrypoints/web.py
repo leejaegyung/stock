@@ -6,6 +6,7 @@ Scheduler starts in lifespan; nginx proxies /api/* to this app.
 import json
 import logging
 import logging.config
+import os
 import re
 from contextlib import asynccontextmanager
 from datetime import date
@@ -53,6 +54,9 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     create_all_tables(settings.db_path)
+    # DeepL 키가 있으면 번역 유틸이 쓸 수 있도록 프로세스 환경에 노출
+    if settings.deepl_api_key:
+        os.environ.setdefault("DEEPL_API_KEY", settings.deepl_api_key)
     start_scheduler()
     _kick_news_backfill()
     yield
@@ -60,15 +64,12 @@ async def lifespan(application: FastAPI):
 
 
 def _kick_news_backfill() -> None:
-    """기동 시 밀린 외신 뉴스 번역을 백그라운드로 몰아서 처리 (요청 블로킹 없음)."""
+    """기동 시 밀린 외신 뉴스 번역을 백그라운드로 한 배치만 처리 (나머지는 스케줄러)."""
     import threading
 
     def _run():
         try:
-            for _ in range(12):  # 최대 12배치 × 25건
-                n = _translate_pending_news(max_items=25)
-                if n == 0:
-                    break
+            _translate_pending_news(max_items=8)
         except Exception as e:
             logger.warning("news backfill failed: %s", e)
 
@@ -721,14 +722,17 @@ async def home_data() -> dict:
     }
 
 
-def _translate_pending_news(max_items: int = 25) -> int:
+def _translate_pending_news(max_items: int = 8) -> int:
     """번역 안 된 외신 뉴스를 한국어로 채운다. 번역 건수 반환.
 
     한국어 원문은 lang='ko' 로 확정, 번역 실패분은 lang 을 비워둬 다음 주기에 재시도.
     """
     from sqlalchemy import or_
 
-    from app.core.translate import detect_lang, translate_to_ko
+    from app.core.translate import backoff_active, detect_lang, translate_to_ko
+
+    if backoff_active():
+        return 0
 
     done = 0
     with _session() as session:

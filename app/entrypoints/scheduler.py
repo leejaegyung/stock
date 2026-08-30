@@ -331,11 +331,14 @@ def _prewarm_caches() -> None:
 
 
 def _translate_news_job() -> None:
-    """번역 안 된 외신 뉴스를 한국어로 채운다 (LLM 미사용, 자체 번역 워크플로우)."""
+    """번역 안 된 외신 뉴스를 한국어로 채운다 (LLM 미사용, 자체 번역 워크플로우).
+
+    무료 엔드포인트 한도를 넘지 않도록 8건씩만 처리 — 백로그는 여러 주기에 걸쳐 소진.
+    """
     try:
         from app.entrypoints.web import _translate_pending_news
 
-        n = _translate_pending_news(max_items=25)
+        n = _translate_pending_news(max_items=8)
         if n:
             logger.info("translated %d foreign news items", n)
     except Exception as e:
