@@ -1467,6 +1467,11 @@ async def price_history(ticker: str, market: str = "US", range: str = "3개월")
         if not need.issubset(set(df.columns)):
             return empty
 
+        # 진행 중인 당일 등 OHLC 가 비어 있는 꼬리 행 제거 (차트 급락·시고저 공백 방지)
+        df = df.dropna(subset=["Open", "High", "Low", "Close"])
+        if df.empty:
+            return empty
+
         ma20_full = df["Close"].rolling(20).mean()
         window = _RANGE_WINDOW.get(rng, 66)
         wdf = df if rng == "max" else df.tail(window)

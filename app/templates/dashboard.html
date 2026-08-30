@@ -213,8 +213,7 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
 .range-seg button{border:none;font-family:inherit;font-size:10.5px;font-weight:500;cursor:pointer;padding:0 8px;background:var(--chip);color:var(--sub)}
 .range-seg button.on{background:var(--accent);color:#fff}
 .chart-legend{display:flex;align-items:center;justify-content:space-between;margin-top:2px;gap:10px;flex-wrap:wrap;font-size:10px;color:var(--mute)}
-.vol-bars{display:flex;align-items:end;gap:2px;height:38px;padding:2px 12px 10px}
-.vol-bars>div{flex:1;border-radius:1px;min-height:1px}
+.vol-bars{height:36px;padding:0 12px 10px}
 
 /* ══ 시그널 카드 ══ */
 .rcard-metrics3{display:grid;grid-template-columns:1fr 1fr 1fr;border-bottom:1px solid var(--line)}
@@ -1358,11 +1357,24 @@ function renderStockHead(s, pf, wl){
     <div class="range-seg">${rangeBtns}</div>
   </div>`;
 }
+/* Catmull-Rom → 베지어. 토스 차트처럼 선을 부드럽게. */
+function smoothPath(p){
+  if (!p.length) return '';
+  if (p.length < 3) return 'M ' + p.map(q => q.join(',')).join(' L ');
+  let d = `M ${p[0][0]},${p[0][1]}`;
+  for (let i = 0; i < p.length - 1; i++){
+    const p0 = p[i - 1] || p[i], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2] || p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C ${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
 function renderStockDetail(h, pf, target, market){
   const ohEl = document.getElementById('stock-ohlc');
   const chEl = document.getElementById('stock-chart');
   const volEl = document.getElementById('stock-volume');
-  const pts = h.points || [];
+  const pts = (h.points || []).filter(p => p.c != null && isFinite(p.c));
   if (pts.length < 2){
     ohEl.innerHTML = `<div class="ohlc-cell" style="grid-column:1 / -1;color:var(--mute);font-size:11px;padding:8px 10px">가격 데이터가 없습니다.</div>`;
     return;
@@ -1379,23 +1391,47 @@ function renderStockDetail(h, pf, target, market){
     ['52주 최저', nf(h.week52_low), 'var(--sub)'],
   ].map(([k,v,c]) => `<div class="ohlc-cell"><div class="k">${k}</div><div class="v" style="color:${c}">${v}</div></div>`).join('');
 
-  const W = 660, H = 200, PAD = 4;
+  const W = 1000, H = 208, PT = 12, PB = 12;   // viewBox, 상하 여백
   const closes = pts.map(p => p.c);
-  const mas = pts.map(p => p.ma).filter(x => x != null);
-  let lo = Math.min(...closes, ...(mas.length ? mas : [Infinity]));
-  let hi = Math.max(...closes, ...(mas.length ? mas : [-Infinity]));
-  if (target != null && target > 0){ lo = Math.min(lo, target); hi = Math.max(hi, target); }
+  const mas = pts.map(p => p.ma).filter(v => v != null);
+  const hasTgt = target != null && target > 0;
+  let lo = Math.min(...closes, ...mas);
+  let hi = Math.max(...closes, ...mas);
+  if (hasTgt){ lo = Math.min(lo, target); hi = Math.max(hi, target); }
+  const padV = (hi - lo) * 0.08 || (hi * 0.01) || 1;
+  lo -= padV; hi += padV;
   const rng = (hi - lo) || 1;
   const x = i => (i / (pts.length - 1) * W).toFixed(1);
-  const y = v => (H - PAD - (v - lo) / rng * (H - PAD * 2)).toFixed(1);
-  const linePts = pts.map((p,i) => `${x(i)},${y(p.c)}`).join(' ');
-  const areaPts = `${linePts} ${W},${H} 0,${H}`;
-  const maPts = pts.map((p,i) => p.ma != null ? `${x(i)},${y(p.ma)}` : null).filter(Boolean).join(' ');
+  const y = v => (PT + (hi - v) / rng * (H - PT - PB)).toFixed(1);
+
+  const coords  = pts.map((p,i) => [ +x(i), +y(p.c) ]);
+  const linePath = smoothPath(coords);
+  const areaPath = `${linePath} L ${W},${H} L 0,${H} Z`;
+  const maCoords = pts.map((p,i) => p.ma != null ? [ +x(i), +y(p.ma) ] : null).filter(Boolean);
+  const maPath = maCoords.length >= 2 ? smoothPath(maCoords) : '';
+
   const up = closes[closes.length - 1] >= closes[0];
-  const lineCol = up ? 'var(--up)' : 'var(--accent-strong)';
-  const grid = [0.25,0.5,0.75].map(f => `<line x1="0" y1="${(H*f).toFixed(0)}" x2="${W}" y2="${(H*f).toFixed(0)}" stroke="var(--line)" stroke-width="1"/>`).join('');
-  const tgtLine = (target != null && target > 0)
-    ? `<line x1="0" y1="${y(target)}" x2="${W}" y2="${y(target)}" stroke="var(--up)" stroke-width="1" stroke-dasharray="5 5"/>` : '';
+  const col = up ? 'var(--up)' : 'var(--accent)';
+  const halo = up ? 'var(--up-a24)' : 'var(--accent-a10)';
+
+  // 가로 격자 + 우측 가격 눈금 (Toss 스타일: 라벨이 우측에 떠 있음)
+  const NG = 4;
+  let gridLines = '', priceLabels = '';
+  for (let k = 0; k <= NG; k++){
+    const val = hi - (k / NG) * (hi - lo);
+    const yy = y(val);
+    gridLines += `<line x1="0" y1="${yy}" x2="${W}" y2="${yy}" stroke="var(--line)" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+    if (k > 0 && k < NG)
+      priceLabels += `<span style="position:absolute;top:${yy}px;right:0;transform:translateY(-50%);background:var(--card);padding:0 3px;border-radius:3px">${nf(val)}</span>`;
+  }
+  const baseLine = `<line x1="0" y1="${y(closes[0])}" x2="${W}" y2="${y(closes[0])}" stroke="var(--faint)" stroke-width="1" stroke-dasharray="3 4" vector-effect="non-scaling-stroke" opacity="0.7"/>`;
+  const tgtLine = hasTgt
+    ? `<line x1="0" y1="${y(target)}" x2="${W}" y2="${y(target)}" stroke="var(--up)" stroke-width="1" stroke-dasharray="2 3" opacity="0.5" vector-effect="non-scaling-stroke"/>` : '';
+
+  // 끝점(현재가) 도트 · 목표가 라벨은 HTML 오버레이 (SVG 가로 왜곡 영향 없이)
+  const dot = `<span style="position:absolute;left:100%;top:${y(closes[closes.length-1])}px;transform:translate(-100%,-50%);width:7px;height:7px;border-radius:50%;background:${col};box-shadow:0 0 0 4px ${halo}"></span>`;
+  const tgtPill = hasTgt
+    ? `<span style="position:absolute;left:0;top:${y(target)}px;transform:translateY(-50%);font-size:9px;color:var(--up);background:var(--up-soft);padding:1px 4px;border-radius:4px;white-space:nowrap">목표 ${nf(target)}</span>` : '';
 
   // ── x축 날짜 눈금 (조회 기간에 맞춰 형식·개수 조정) ──
   const fmtTick = d => {
@@ -1406,11 +1442,9 @@ function renderStockDetail(h, pf, target, market){
     if (_stockRange === '1년')  return `${String(Y).slice(2)}.${M}`;
     return `${M}/${D}`;
   };
-  const nTick = pts.length > 40 ? 7 : pts.length > 12 ? 5 : Math.min(pts.length, 4);
+  const nTick = pts.length > 40 ? 6 : pts.length > 12 ? 4 : Math.min(pts.length, 3);
   const tickIdx = [...new Set(Array.from({length:nTick}, (_,k) =>
     Math.round(k * (pts.length - 1) / (nTick - 1))))];
-  const vgrid = tickIdx.map(i =>
-    `<line x1="${x(i)}" y1="0" x2="${x(i)}" y2="${H}" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 4"/>`).join('');
   const axisLabels = tickIdx.map((i,k) => {
     const f = i / (pts.length - 1);
     const pos = k === 0 ? 'left:0'
@@ -1420,29 +1454,38 @@ function renderStockDetail(h, pf, target, market){
   }).join('');
 
   chEl.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">
-      ${grid}
-      ${vgrid}
-      <polygon points="${areaPts}" fill="var(--accent-a08)"/>
-      <polyline points="${linePts}" fill="none" stroke="${lineCol}" stroke-width="1.6"/>
-      ${maPts ? `<polyline points="${maPts}" fill="none" stroke="var(--warn)" stroke-width="1" stroke-dasharray="3 3"/>` : ''}
-      ${tgtLine}
-    </svg>
-    <div style="position:relative;height:13px;margin-top:3px;font-size:9.5px;color:var(--mute);font-variant-numeric:tabular-nums">${axisLabels}</div>
+    <div style="position:relative">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="color:${col};display:block;overflow:visible">
+        <defs><linearGradient id="csg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="currentColor" stop-opacity="0.15"/>
+          <stop offset="100%" stop-color="currentColor" stop-opacity="0"/>
+        </linearGradient></defs>
+        ${gridLines}${baseLine}${tgtLine}
+        <path d="${areaPath}" fill="url(#csg)"/>
+        <path d="${linePath}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+        ${maPath ? `<path d="${maPath}" fill="none" stroke="var(--faint)" stroke-width="1" stroke-linecap="round" vector-effect="non-scaling-stroke"/>` : ''}
+      </svg>
+      <div style="position:absolute;inset:0;font-size:9px;color:var(--mute);font-variant-numeric:tabular-nums;pointer-events:none">${priceLabels}${tgtPill}${dot}</div>
+    </div>
+    <div style="position:relative;height:13px;margin-top:5px;font-size:9.5px;color:var(--mute);font-variant-numeric:tabular-nums">${axisLabels}</div>
     <div class="chart-legend">
       <div style="display:flex;gap:10px">
-        <span><span style="color:${lineCol}">━</span> 종가</span>
-        ${maPts ? '<span><span style="color:var(--warn)">┄</span> MA20</span>' : ''}
-        ${target != null && target > 0 ? `<span><span style="color:var(--up)">┄</span> AI 목표가 ${nf(target)}</span>` : ''}
+        <span><span style="color:${col}">━</span> 종가</span>
+        ${maPath ? '<span><span style="color:var(--faint)">━</span> MA20</span>' : ''}
+        ${hasTgt ? `<span><span style="color:var(--up)">┈</span> AI 목표가</span>` : ''}
       </div>
       <div style="font-variant-numeric:tabular-nums">${pts[0].d} ~ ${pts[pts.length-1].d}</div>
     </div>`;
+
   const vols = pts.map(p => p.v || 0);
   const vmax = Math.max(...vols, 1);
-  volEl.innerHTML = vols.map(v => {
-    const hgt = Math.max(1, Math.round(v / vmax * 34));
-    return `<div style="height:${hgt}px;background:${v > vmax * 0.8 ? 'var(--up-a24)' : 'var(--vol)'}"></div>`;
-  }).join('');
+  const bw = Math.max(1, (W / pts.length) * 0.62);
+  volEl.innerHTML = `<svg viewBox="0 0 ${W} 40" width="100%" height="36" preserveAspectRatio="none" style="display:block">
+    ${pts.map((p,i) => {
+      const vh = Math.max(1, (p.v || 0) / vmax * 38);
+      return `<rect x="${(+x(i) - bw/2).toFixed(1)}" y="${(40 - vh).toFixed(1)}" width="${bw.toFixed(1)}" height="${vh.toFixed(1)}" fill="${p.c >= p.o ? 'var(--up-a24)' : 'var(--accent-a10)'}"/>`;
+    }).join('')}
+  </svg>`;
 }
 
 function renderBriefBanner(briefId, today){
