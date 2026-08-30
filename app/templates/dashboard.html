@@ -1122,7 +1122,7 @@ async function loadHomeData(){
     if (pick && (!_stockSel || !d.watchlist.find(s => s.ticker === _stockSel.ticker && s.market === _stockSel.market))){
       _stockSel = { ticker: pick.ticker, market: pick.market };
     }
-    if (_stockSel) loadStockDetail();
+    if (_stockSel){ loadStockDetail(); renderHomeAI(d.watchlist); }
   }).catch(() => {
     document.getElementById('home-account').innerHTML = `<div style="padding:12px;font-size:11px;color:var(--mute)">시세를 불러오지 못했습니다.</div>`;
   });
@@ -1236,6 +1236,7 @@ function renderHomeWatchlist(list){
 function selectStock(ticker, market){
   _stockSel = { ticker, market };
   renderHomeWatchlist(_homeWatchlist);
+  renderHomeAI(_homeWatchlist);
   loadStockDetail();
 }
 function buildSpark(vals, w, h, color){
@@ -1446,10 +1447,25 @@ function renderHomeAI(watchlist){
   const box = document.getElementById('home-ai-box');
   const withReport = watchlist.filter(s => s.report);
   if (!withReport.length){ box.style.display = 'none'; return; }
-  withReport.sort((a,b) => String(b.report.date).localeCompare(String(a.report.date)));
-  const top = withReport[0];
-  const M = top.report.metrics || {};
   box.style.display = '';
+
+  // 왼쪽 관심종목에서 고른 종목의 AI 결론을 우선 표시. 없으면 가장 최근 리포트.
+  const selRow = _stockSel && watchlist.find(s => s.ticker === _stockSel.ticker && s.market === _stockSel.market);
+  let top = (selRow && selRow.report) ? selRow : null;
+  if (!top && selRow){
+    document.getElementById('home-ai-title').textContent = `${selRow.ticker} AI 결론`;
+    document.getElementById('home-ai-verdict').innerHTML = '';
+    const b = document.getElementById('home-ai-body');
+    b.style.padding = '0';
+    b.innerHTML = `<div style="padding:14px 12px;font-size:12px;color:var(--mute)">아직 분석 리포트가 없습니다.
+      <div style="margin-top:8px"><button class="btn btn-primary btn-xs" onclick="analyze('${esc(selRow.ticker)}','${selRow.market}')">지금 분석</button></div></div>`;
+    return;
+  }
+  if (!top){
+    withReport.sort((a,b) => String(b.report.date).localeCompare(String(a.report.date)));
+    top = withReport[0];
+  }
+  const M = top.report.metrics || {};
   document.getElementById('home-ai-title').textContent = `${top.ticker} AI 결론`;
   const csTxt = M.confidence_score != null ? ` <span style="font-size:10px;color:var(--mute)">${M.confidence_score}</span>` : '';
   document.getElementById('home-ai-verdict').innerHTML = verdictChip(top.report.verdict) + ' ' + confBar(top.report.confidence) + csTxt;
