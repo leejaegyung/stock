@@ -9,6 +9,7 @@ from datetime import date
 
 import pandas as pd
 
+from app.core.confidence import analysis_confidence, improvement_hints
 from app.core.formulas import (
     cashflow_pattern, cape_judgment, per_roe_judgment,
     expected_value, half_kelly,
@@ -455,19 +456,37 @@ def _stock_report_md(
     ts: int, fs: int, ms: int, ns: int,
     bulls: list[str], bears: list[str],
     quant: dict, news_lines: list[str],
+    conf: dict | None = None,
 ) -> str:
     total = ts + fs + ms + ns
-    vd, cf = _verdict(total)
+    vd, _band_cf = _verdict(total)
+    cf = (conf or {}).get("grade", _band_cf)
     emoji = {"매수": "🟢", "추가매수": "🔵", "보유": "🟡", "매도": "🔴"}.get(vd, "⚪")
     name = fund.get("info", {}).get("shortName", ticker)
     info = fund.get("info", {})
 
+    conf_str = f"확신도: {cf}"
+    if conf and conf.get("score") is not None:
+        conf_str = f"확신도: {cf} ({conf['score']}/100)"
+
     L: list[str] = [
         f"## {ticker} [{market}] — {name}",
-        f"- **결론**: {emoji} **{vd}** (확신도: {cf}) | 종합점수: {total}/100",
+        f"- **결론**: {emoji} **{vd}** ({conf_str}) | 종합점수: {total}/100",
         f"  - 기술 {ts}/30 · 펀더멘털 {fs}/40 · 거시 {ms}/20 · 뉴스 {ns}/10",
         "",
     ]
+
+    # 확신도 분석
+    if conf:
+        L.append("**확신도 분석**")
+        fac = " · ".join(f"{f['name']} {f['score']}/{f['max']}" for f in conf.get("factors", []))
+        if fac:
+            L.append(f"- {fac}")
+        for r in conf.get("reasons", []):
+            L.append(f"  - {r}")
+        for h in conf.get("hints", []):
+            L.append(f"  - 💡 {h}")
+        L.append("")
 
     # 기술적
     if ta.get("ok"):
@@ -544,7 +563,7 @@ def analyze_stock_algo(
     ds = USDataSource() if market.upper() != "KR" else KRDataSource()
 
     def _fund():   return ds.get_financials(ticker)
-    def _news():   return ds.get_news(ticker, days=3)
+    def _news():   return ds.get_news(ticker, days=7)   # 3→7일: 심리 신호 근거 보강
     def _macro():  return macro_data or USDataSource().get_macro_data()
     def _price():  return _fetch_price_df(ticker, market)
 
@@ -577,7 +596,7 @@ def analyze_stock_algo(
     ns, news_lines   = _score_news(news)
 
     total = ts + fs + ms + ns
-    vd, cf = _verdict(total)
+    vd, _band_cf = _verdict(total)
 
     # Layer 2 — Bull / Bear 신호
     bulls = _bull_signals(ta, fund, macro)
@@ -586,12 +605,28 @@ def analyze_stock_algo(
     # Layer 3 — 계량 검증 (§4)
     quant = _quant_metrics(ts, fs, ms, fund, macro)
 
+    # Layer 3b — 확신도 (데이터 커버리지 · 신호 일치 · 우위 · 경계선 · 뉴스)
+    _info = fund.get("info", {}) or {}
+    coverage = {
+        "technical_ok": bool(ta.get("ok")),
+        "has_ma200": ta.get("sma200") is not None,
+        "has_pe": bool(_info.get("trailingPE") or _info.get("forwardPE")),
+        "has_roe": _info.get("returnOnEquity") is not None,
+        "has_cashflow": (fund.get("cashflow", {}) or {}).get("operating") is not None,
+    }
+    conf = analysis_confidence(
+        {"technical": ts, "fundamental": fs, "macro": ms, "news": ns},
+        coverage, len(bulls), len(bears), len(news),
+    )
+    conf["hints"] = improvement_hints(conf, coverage, len(news), market)
+    cf = conf["grade"]
+
     # Layer 4 — 리포트
     report_md = _stock_report_md(
         ticker, market, date_str,
         ta, fund, macro,
         ts, fs, ms, ns,
-        bulls, bears, quant, news_lines,
+        bulls, bears, quant, news_lines, conf,
     )
 
     key_reasons = (bulls if vd in ("매수", "추가매수") else bears)[:3]
@@ -610,6 +645,7 @@ def analyze_stock_algo(
         "bull_signals":    bulls,
         "bear_signals":    bears,
         "quant_risk":      quant,
+        "confidence":      conf,
         "research_summary": {
             "verdict": f"강세 신호 {len(bulls)}개 / 약세 신호 {len(bears)}개",
         },

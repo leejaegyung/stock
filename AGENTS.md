@@ -39,6 +39,10 @@ Layer 0: config.py  (모든 레이어 공유)
 ```
 app/config.py                    — Settings (pydantic-settings, .env)
 app/core/formulas.py             — EV·켈리·CAPE·현금흐름 순수 함수 (Layer 1)
+app/core/confidence.py           — 분석 확신도 모델 순수 함수 (Layer 1): 데이터 커버리지·신호
+                                   일치도·신호 우위·점수 확신·뉴스 근거 5요소 → 0~100 점수 + 상/중/하
+                                   + 근거 + 개선 힌트. _verdict 의 점수구간 확신도를 대체
+app/core/market_scan.py          — 시장 국면·섹터 모멘텀 순수 함수 (Layer 1)
 app/core/quant.py                — 포트폴리오 계량 분석 순수 함수 (Layer 1): 변동성·샤프·소르티노·
                                    MDD·VaR·베타·상관·분산비율·비중 최적화(동일/역변동성/리스크패리티/
                                    최소분산)·리밸런싱 백테스트. gs-quant timeseries 스타일, 외부 API 없음

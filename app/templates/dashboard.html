@@ -1450,12 +1450,14 @@ function renderHomeAI(watchlist){
   const M = top.report.metrics || {};
   box.style.display = '';
   document.getElementById('home-ai-title').textContent = `${top.ticker} AI 결론`;
-  document.getElementById('home-ai-verdict').innerHTML = verdictChip(top.report.verdict) + ' ' + confBar(top.report.confidence);
+  const csTxt = M.confidence_score != null ? ` <span style="font-size:10px;color:var(--mute)">${M.confidence_score}</span>` : '';
+  document.getElementById('home-ai-verdict').innerHTML = verdictChip(top.report.verdict) + ' ' + confBar(top.report.confidence) + csTxt;
   const body = document.getElementById('home-ai-body');
   const kv = [];
   if (M.ev != null) kv.push(['기대값 (EV)', (M.ev >= 0 ? '+' : '') + M.ev + '%', M.ev >= 0 ? 'var(--up)' : 'var(--accent-strong)']);
   if (M.half_kelly != null) kv.push(['켈리 권장비중', M.half_kelly + '%', 'var(--ink)']);
-  if (M.score_total != null) kv.push(['종합 점수', M.score_total + '/100', 'var(--ink)']);
+  if (M.confidence_score != null) kv.push(['확신도', `${M.confidence_grade || top.report.confidence || '—'} (${M.confidence_score})`, M.confidence_score >= 68 ? 'var(--up)' : M.confidence_score >= 45 ? 'var(--ink)' : 'var(--warn)']);
+  else if (M.score_total != null) kv.push(['종합 점수', M.score_total + '/100', 'var(--ink)']);
   if (M.valuation && M.valuation !== '-') kv.push(['밸류에이션', String(M.valuation).split('|')[0].trim(), 'var(--warn)']);
   const reasons = (M.key_reasons && M.key_reasons.length) ? M.key_reasons : [];
   const warns = (M.warnings && M.warnings.length) ? M.warnings : [];
@@ -1544,6 +1546,26 @@ function renderReportsSummary(){
   document.getElementById('reports-summary').innerHTML = cells.map(([l,v,c,s]) =>
     `<div class="stat-cell"><div class="stat-cell-label">${l}</div><div class="stat-cell-val ${c}">${v}</div><div class="stat-cell-sub">${esc(s)}</div></div>`).join('');
 }
+function confDetail(M){
+  const fac = M.confidence_factors, rs = M.confidence_reasons || [], hints = M.confidence_hints || [];
+  if ((!fac || !fac.length) && !rs.length) return '';
+  const bars = (fac || []).map(f => {
+    const p = f.max ? Math.round(f.score / f.max * 100) : 0;
+    const col = p >= 70 ? 'var(--up)' : p >= 40 ? 'var(--warn)' : 'var(--accent-strong)';
+    return `<div style="display:flex;align-items:center;gap:6px;font-size:10px;margin-bottom:2px">
+      <span style="color:var(--mute);width:66px;flex-shrink:0">${esc(f.name)}</span>
+      <span style="flex:1;height:4px;background:var(--track);border-radius:2px;overflow:hidden"><i style="display:block;height:4px;width:${p}%;background:${col}"></i></span>
+      <span style="color:var(--sub);font-variant-numeric:tabular-nums;width:34px;text-align:right">${f.score}/${f.max}</span>
+    </div>`;
+  }).join('');
+  const notes = rs.map(t => `<div style="display:flex;gap:5px;font-size:10.5px;color:var(--sub);line-height:1.45;margin-top:2px"><span style="color:var(--mute)">·</span><span>${esc(t)}</span></div>`).join('');
+  const hh = hints.map(t => `<div style="display:flex;gap:5px;font-size:10.5px;color:var(--accent);line-height:1.45;margin-top:2px"><span>💡</span><span>${esc(t)}</span></div>`).join('');
+  return `<details style="border-bottom:1px solid var(--line)">
+    <summary style="padding:6px 12px;font-size:10.5px;color:var(--mute);cursor:pointer;list-style:none">확신도 근거 ▾</summary>
+    <div style="padding:2px 12px 9px">${bars}${notes}${hh}</div>
+  </details>`;
+}
+
 function renderReportsCards(){
   const el = document.getElementById('reports-cards');
   let list = _reportsAll.slice();
@@ -1593,8 +1615,9 @@ function renderReportsCards(){
       <div class="rcard-metrics3">
         <div><div class="k">EV</div><div class="v" style="color:${evCol}">${evStr}</div></div>
         <div><div class="k">켈리</div><div class="v">${M.half_kelly != null ? M.half_kelly + '%' : '—'}</div></div>
-        <div><div class="k">확신도</div><div class="v" style="display:flex;gap:4px;align-items:center">${esc(r.confidence || '—')} ${confBar(r.confidence)}</div></div>
+        <div><div class="k">확신도</div><div class="v" style="display:flex;gap:4px;align-items:center">${esc(r.confidence || '—')}${M.confidence_score != null ? ' <span style="font-size:11px;color:var(--mute)">' + M.confidence_score + '</span>' : ''} ${confBar(r.confidence)}</div></div>
       </div>
+      ${confDetail(M)}
       ${M.score_total != null ? `<div style="padding:7px 12px;border-bottom:1px solid var(--line);font-size:10.5px;color:var(--mute)">종합 ${M.score_total}/100 · 기술 ${M.score_technical ?? '-'}/30 · 펀더멘털 ${M.score_fundamental ?? '-'}/40 · 거시 ${M.score_macro ?? '-'}/20 · 뉴스 ${M.score_news ?? '-'}/10</div>` : ''}
       ${targetBlock}
       ${reasonBlock}
@@ -1937,9 +1960,11 @@ async function showReport(id){
   try {
     const r = await api(`/api/reports/${id}`);
     _modalRaw = r.report_md || '';
+    const cs = (r.metrics || {}).confidence_score;
     document.getElementById('modal-hd-info').innerHTML = `
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-        <span style="font-weight:700;font-size:15px">${esc(r.ticker)}</span>${mktChip(r.market)}${verdictChip(r.verdict)}${confBar(r.confidence)}
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap">
+        <span style="font-weight:700;font-size:15px">${esc(r.ticker)}</span>${mktChip(r.market)}${verdictChip(r.verdict)}
+        <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--sub)">확신도 ${esc(r.confidence || '—')}${cs != null ? ` (${cs}/100)` : ''} ${confBar(r.confidence)}</span>
       </div>
       <div style="font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums">${esc(r.date)}</div>`;
     document.getElementById('modal-body').innerHTML = marked.parse(_modalRaw) || '<p style="color:var(--mute)">내용 없음</p>';

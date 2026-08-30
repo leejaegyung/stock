@@ -226,11 +226,17 @@ def _report_metrics(result: dict) -> dict:
     advice = result.get("advice", {}) or {}
     bulls = result.get("bull_signals", []) or []
     bears = result.get("bear_signals", []) or []
+    conf = result.get("confidence", {}) or {}
     price = ta.get("price")
     ev = quant.get("ev")
     target = round(price * (1 + ev / 100), 2) if (price and ev is not None) else None
     return {
         "score_total": scores.get("total"),
+        "confidence_score": conf.get("score"),
+        "confidence_grade": conf.get("grade"),
+        "confidence_factors": conf.get("factors"),
+        "confidence_reasons": conf.get("reasons"),
+        "confidence_hints": conf.get("hints"),
         "score_technical": scores.get("technical"),
         "score_fundamental": scores.get("fundamental"),
         "score_macro": scores.get("macro"),
@@ -274,6 +280,19 @@ def _parse_metrics_md(md: str) -> dict:
     m = re.search(r"밸류에이션:\s*(.+)", md)
     if m:
         out["valuation"] = m.group(1).strip()
+    m = re.search(r"확신도:\s*([상중하])\s*\((\d+)/100\)", md)
+    if m:
+        out["confidence_grade"] = m.group(1)
+        out["confidence_score"] = int(m.group(2))
+    facs = re.findall(r"([가-힣 ]+?)\s+(\d+)/(\d+)", md)
+    known = {"데이터 커버리지", "신호 일치도", "신호 우위", "점수 확신", "뉴스 근거"}
+    parsed_fac = [
+        {"name": n.strip(), "score": int(s), "max": int(mx)}
+        for (n, s, mx) in facs
+        if n.strip() in known
+    ]
+    if parsed_fac:
+        out["confidence_factors"] = parsed_fac
     bull = re.findall(r"^\s*-\s*🟢\s*(.+?)\s*$", md, re.M)
     bear = re.findall(r"^\s*-\s*🔴\s*(.+?)\s*$", md, re.M)
     out["bull_count"] = len(bull)
