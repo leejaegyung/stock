@@ -449,6 +449,7 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
 .md pre code{background:none;padding:0}
 .md blockquote{border-left:2px solid var(--accent);padding:2px 10px;color:var(--sub);margin:4px 0}
 .md hr{border:none;border-top:1px solid var(--line);margin:12px 0}
+.md .rg{color:var(--mute);font-weight:400;font-size:.92em}
 #macro-tip{display:none;position:fixed;z-index:300;background:var(--card);border:1px solid var(--line-2);border-radius:10px;padding:9px 11px;width:234px;font-size:11.5px;line-height:1.65;color:var(--sub);box-shadow:0 4px 16px var(--shadow);pointer-events:none}
 #macro-tip .tt-title{font-weight:700;color:var(--ink);margin-bottom:5px;font-size:12px;display:block}
 .tt-pos{color:var(--up)}
@@ -1968,6 +1969,74 @@ async function loadSchedulerStatus(){
 }
 
 /* ══ 모달 ═════════════════════════════════════════════════════════════════ */
+/* 전문 보기 — 표시되는 값·항목은 그대로 두고, 어려운 용어에 쉬운 풀이만 덧붙인다.
+   원문(_modalRaw)은 손대지 않으므로 '복사'는 계속 원본을 준다. */
+function humanizeReport(md){
+  if (!md) return md;
+  const g = t => `<span class="rg">${t}</span>`;   // 회색 보조 설명
+  return md.split('\n').map(raw => {
+    let s = raw;
+
+    // ── 섹션 제목: 뜻을 붙여 준다 ──
+    s = s.replace(/\*\*확신도 분석\*\*/,        '**확신도 — 이 결론을 얼마나 믿어도 되나**');
+    s = s.replace(/\*\*기술적 지표\*\*/,        '**기술적 지표 — 최근 주가 흐름**');
+    s = s.replace(/\*\*펀더멘털\*\*/,           '**펀더멘털 — 기업의 재무 체력**');
+    s = s.replace(/\*\*계량 검증 \(§4 공식\)\*\*/, '**계량 검증 — 숫자로 다시 따져 본 결과**');
+    s = s.replace(/\*\*강세 신호 \(Bull\)\*\*/,  '**좋게 볼 근거 (강세 신호)**');
+    s = s.replace(/\*\*약세·리스크 신호 \(Bear\)\*\*/, '**조심할 근거 (약세·리스크 신호)**');
+    s = s.replace(/\*\*최근 뉴스\*\*/,          '**최근 뉴스 — 심리에 영향 준 소식**');
+
+    // ── 확신도 근거 항목 이름 ──
+    s = s.replace('데이터 커버리지', '자료 충분도')
+         .replace('신호 일치도',     '신호 방향 일치')
+         .replace('신호 우위',       '강세·약세 우열')
+         .replace('점수 확신',       '점수 선명도')
+         .replace('뉴스 근거',       '뉴스 뒷받침');
+
+    // ── 점수 분해 라인의 '거시' ──
+    s = s.replace(/거시 (\d+)\/20/, '경제·금리 환경 $1/20');
+
+    // ── RSI: 0~100, 70↑ 과열 / 30↓ 침체 ──
+    s = s.replace(/RSI\s+([\d.]+)/, (_, v) => {
+      const n = parseFloat(v);
+      const tag = n >= 70 ? '과열 — 단기 급등, 조정 주의'
+                : n <= 30 ? '침체 — 단기 급락, 반등 여지'
+                :           '중립 — 사자·팔자 힘이 비슷';
+      return `RSI ${v} ${g('('+tag+')')}`;
+    });
+
+    // ── MACD 히스토그램: 부호가 추세 힘의 방향 ──
+    s = s.replace(/MACD hist\s+([+-]?[\d.]+)/, (_, v) => {
+      const n = parseFloat(v);
+      const tag = n > 0 ? '상승 쪽 힘 우세' : n < 0 ? '하락 쪽 힘 우세' : '방향 중립';
+      return `추세 힘(MACD) ${v} ${g('('+tag+')')}`;
+    });
+
+    // ── 이동평균·볼린저밴드 용어 ──
+    s = s.replace(/SMA(\d+)/g, '$1일 평균가');
+    s = s.replace(/BB 상단 ([\d,]+) \/ 하단 ([\d,]+)/,
+                  (_, u, l) => `주가가 주로 움직이는 범위(볼린저밴드) ${l} ~ ${u}`);
+    s = s.replace(/수익률:\s/, '기간별 등락: ');
+
+    // ── 펀더멘털 지표 풀이 (한 줄에 하나만 매칭) ──
+    s = s.replace(/P\/E\s+([\d.]+)/,          (_, v) => `P/E ${v} ${g('(주가 ÷ 주당순이익 — 낮을수록 저평가)')}`);
+    s = s.replace(/ROE\s+([\d.]+%)/,          (_, v) => `ROE ${v} ${g('(자기자본으로 버는 이익률 — 높을수록 우량)')}`);
+    s = s.replace(/부채비율\s+([\d.]+%)/,      (_, v) => `부채비율 ${v} ${g('(100% 넘으면 빚이 자본보다 많음)')}`);
+    s = s.replace(/이익성장\s+([+-]?[\d.]+%)/, (_, v) => `이익성장 ${v} ${g('(전년 대비 이익 증가율)')}`);
+    s = s.replace(/배당\s+([\d.]+%)/,          (_, v) => `배당수익률 ${v} ${g('(연 배당금 ÷ 주가)')}`);
+
+    // ── 계량 검증 ──
+    s = s.replace(/기대값:\s*([+-]?[\d.]+%)/,  (_, v) => `기대 수익률: ${v} ${g('(오를 확률·내릴 확률까지 반영한 평균)')}`);
+    s = s.replace(/켈리 권장비중:\s*([\d.]+%)\s*\(하프켈리\)/,
+                  (_, v) => `권장 투자 비중: ${v} ${g('(위험을 감안해 이론값의 절반만 — 하프켈리)')}`);
+    s = s.replace(/밸류에이션:/, '가치 평가:');
+    s = s.replace(/승률\s+(\d+%)/,     '적중 확률 $1')
+         .replace(/기대이익\s+(\d+%)/, '오를 때 평균 +$1')
+         .replace(/기대손실\s+(\d+%)/, '내릴 때 평균 −$1');
+
+    return s;
+  }).join('\n');
+}
 async function showReport(id){
   document.getElementById('modal-hd-info').innerHTML = '<span style="color:var(--mute)">로딩 중…</span>';
   document.getElementById('modal-body').innerHTML = '';
@@ -1982,7 +2051,7 @@ async function showReport(id){
         <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--sub)">확신도 ${esc(r.confidence || '—')}${cs != null ? ` (${cs}/100)` : ''} ${confBar(r.confidence)}</span>
       </div>
       <div style="font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums">${esc(r.date)}</div>`;
-    document.getElementById('modal-body').innerHTML = marked.parse(_modalRaw) || '<p style="color:var(--mute)">내용 없음</p>';
+    document.getElementById('modal-body').innerHTML = marked.parse(humanizeReport(_modalRaw)) || '<p style="color:var(--mute)">내용 없음</p>';
   } catch(e){ document.getElementById('modal-body').innerHTML = `<p style="color:var(--up)">${esc(e.message)}</p>`; }
 }
 function modalBgClick(e){ if (e.target === document.getElementById('modal-bg')) closeModal(); }
