@@ -64,12 +64,19 @@ async def lifespan(application: FastAPI):
 
 
 def _kick_news_backfill() -> None:
-    """기동 시 밀린 외신 뉴스 번역을 백그라운드로 한 배치만 처리 (나머지는 스케줄러)."""
+    """기동 시 밀린 외신 뉴스 번역을 백그라운드로 처리 (요청 블로킹 없음).
+
+    DeepL 키가 있으면 한도가 넉넉하니 여러 배치를 이어서, 없으면 1배치만.
+    """
     import threading
+
+    batches = 12 if settings.deepl_api_key else 1
 
     def _run():
         try:
-            _translate_pending_news(max_items=8)
+            for _ in range(batches):
+                if _translate_pending_news(max_items=20) == 0:
+                    break
         except Exception as e:
             logger.warning("news backfill failed: %s", e)
 
