@@ -1192,6 +1192,25 @@ def _us_market_state() -> str:
     return "CLOSED"
 
 
+def _kr_market_state() -> str:
+    """KST 근사로 한국(KRX) 장 상태 추정 (API 호출 없이, 표시용). 공휴일 미반영."""
+    from datetime import datetime, timedelta, timezone
+
+    kst = datetime.now(timezone.utc) + timedelta(hours=9)
+    if kst.weekday() >= 5:
+        return "CLOSED"
+    hm = kst.hour * 60 + kst.minute
+    if hm < 8 * 60:
+        return "CLOSED"
+    if hm < 9 * 60:                 # 08:00~09:00 장 시작 동시호가
+        return "PRE"
+    if hm < 15 * 60 + 30:           # 09:00~15:30 정규장
+        return "REGULAR"
+    if hm < 18 * 60:               # 15:30~18:00 시간외
+        return "POST"
+    return "CLOSED"
+
+
 def _batch_prices(items: list[tuple]) -> dict:
     """관심목록 시세 배치 조회.
 
@@ -1294,7 +1313,8 @@ async def get_portfolio(refresh: bool = False) -> list[dict]:
         return []
 
     px = _batch_prices(items)
-    mkt_state = _us_market_state()
+    us_state = _us_market_state()
+    kr_state = _kr_market_state()
 
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1324,7 +1344,7 @@ async def get_portfolio(refresh: bool = False) -> list[dict]:
         pd_data = {
             "price": price_raw,
             "prev_close": prev_close_raw,
-            "market_state": mkt_state if market == "US" else "CLOSED",
+            "market_state": us_state if market == "US" else kr_state,
             "dividend_rate": div["rate"],
             "dividend_yield": div["yield"],
             "dividend_months": div["months"],

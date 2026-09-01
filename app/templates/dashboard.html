@@ -1328,7 +1328,7 @@ function renderHomePositions(pf, watchlist){
   </table>`;
 }
 function marketStateBadge(ms){
-  const cfg = { REGULAR:['● 장중','var(--up)'], PRE:['프리마켓','var(--warn)'], POST:['포스트','var(--sub)'], CLOSED:['장마감','var(--mute)'] };
+  const cfg = { REGULAR:['● 장중','var(--up)'], PRE:['장 시작 전','var(--warn)'], POST:['장 마감 후','var(--sub)'], CLOSED:['장마감','var(--mute)'] };
   const [label, col] = cfg[ms] || ['장마감','var(--mute)'];
   return `<span style="font-size:10px;font-weight:500;color:${col}">${label}</span>`;
 }
