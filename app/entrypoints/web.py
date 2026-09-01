@@ -1155,19 +1155,57 @@ def _dividends(ticker: str, market: str) -> dict:
         return hit[1]
     out = {"rate": 0.0, "yield": 0.0, "months": []}
     try:
+        import time as _time
+        from datetime import datetime
+
         import yfinance as yf
 
         yft = yf.Ticker(ticker if market == "US" else f"{ticker}.KS")
+
+        # 1순위: 실제 배당 지급 이력 — 개별주·ETF 모두 신뢰 가능
+        #   연 배당 = 최근 정기 배당액 × 연간 지급횟수 (지급 시점에 따른 TTM 3/5회 편차 방지)
+        #   지급 이력이 부족하면 TTM 합, 그것도 없으면 info 필드
+        fwd = ttm = 0.0
         try:
             divs = yft.dividends
             if divs is not None and len(divs):
-                out["months"] = sorted({int(d.month) for d in divs.tail(6).index})
+                cutoff = _time.time() - 370 * 86400
+                recent = sorted(
+                    ((ts.timestamp(), float(v)) for ts, v in divs.items() if float(v) > 0),
+                    key=lambda x: x[0],
+                )
+                ttm = sum(v for t, v in recent if t >= cutoff)
+                base = [x for x in recent if x[0] >= cutoff] or recent[-4:]
+                out["months"] = sorted({datetime.fromtimestamp(t).month for t, _ in base})
+                tail = recent[-6:]
+                if len(tail) >= 3:
+                    gaps = [tail[i + 1][0] - tail[i][0] for i in range(len(tail) - 1)]
+                    med_gap = sorted(gaps)[len(gaps) // 2]
+                    if med_gap > 0:
+                        freq = max(1, min(12, round(365 * 86400 / med_gap)))
+                        fwd = tail[-1][1] * freq
         except Exception:
             pass
-        info = yft.info or {}
-        out["rate"] = float(info.get("dividendRate") or 0)
-        _dy = float(info.get("dividendYield") or 0)
-        out["yield"] = _dy / 100 if _dy > 1 else _dy
+
+        # info 필드 (이력이 부족할 때 폴백)
+        info = {}
+        try:
+            info = yft.info or {}
+        except Exception:
+            info = {}
+
+        rate = fwd or ttm or float(
+            info.get("dividendRate") or info.get("trailingAnnualDividendRate") or 0
+        )
+        out["rate"] = round(rate, 4)
+
+        # 수익률은 get_portfolio 에서 rate/현재가로 계산 (스케일 모호성 없음).
+        # 여기서는 rate 를 못 구한 경우의 폴백만 info 에서.
+        if rate <= 0:
+            _dy = float(
+                info.get("dividendYield") or info.get("trailingAnnualDividendYield") or 0
+            )
+            out["yield"] = _dy / 100 if _dy > 1 else _dy
     except Exception as e:
         logger.debug("dividend fetch failed %s: %s", key, e)
     _div_cache[key] = (now, out)
@@ -1342,12 +1380,19 @@ async def get_portfolio(refresh: bool = False) -> list[dict]:
         prev_close_raw = lp["prev"] if lp else None
         div = div_map.get((ticker, market), {"rate": 0.0, "yield": 0.0, "months": []})
 
+        # 수익률 = 주당 연 배당 ÷ 현재가 (info 의 모호한 스케일 대신 직접 계산)
+        div_yield = (
+            round(div["rate"] / price_raw, 4)
+            if (div["rate"] and price_raw)
+            else div["yield"]
+        )
+
         pd_data = {
             "price": price_raw,
             "prev_close": prev_close_raw,
             "market_state": us_state if market == "US" else kr_state,
             "dividend_rate": div["rate"],
-            "dividend_yield": div["yield"],
+            "dividend_yield": div_yield,
             "dividend_months": div["months"],
             "sparkline": lp["spark"] if lp else [],
             "currency": "USD" if market == "US" else "KRW",
