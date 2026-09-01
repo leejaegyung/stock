@@ -1118,7 +1118,7 @@ async def apply_recurring(year: int, month: int) -> dict:
 # ── 포트폴리오 (보유 종목 평가 + 배당) ────────────────────────────────────────────
 
 _portfolio_cache: dict = {"data": [], "ts": 0.0}
-_PORTFOLIO_TTL = 600  # 10분 — 배치 다운로드로 갱신 비용 낮음
+_PORTFOLIO_TTL = 90  # 1.5분 — 관심목록 시세 준실시간 갱신 (프런트 60초 폴링)
 
 _pxdf_cache: dict = {}      # "ticker:market:period" -> (ts, DataFrame)
 _PXDF_TTL = 1800           # 30분 — history/analytics/backtest/sparkline 공용
@@ -1193,40 +1193,73 @@ def _us_market_state() -> str:
 
 
 def _batch_prices(items: list[tuple]) -> dict:
-    """US·KR 각각 yf.download 1회(1개월)로 종가·전일종가·스파크라인 배치 조회."""
+    """관심목록 시세 배치 조회.
+
+    1) 일봉 1개월 다운로드 → 전일종가·스파크라인, 장 마감 시 현재가
+    2) 1분봉 당일 다운로드 → 장중 현재가로 덮어씀 (yfinance 기준 ≈15분 지연)
+    """
     import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timedelta, timezone
 
     us = [t for (t, m, *_) in items if m == "US"]
     kr = [f"{t}.KS" for (t, m, *_) in items if m == "KR"]
     px: dict = {}
+    et_today = (datetime.now(timezone.utc) - timedelta(hours=5)).date()
 
-    def _load(syms):
+    def _daily(syms):
         if not syms:
             return
         try:
             df = yf.download(
-                syms, period="1mo", progress=False,
+                syms, period="1mo", interval="1d", progress=False,
                 group_by="ticker", threads=True, auto_adjust=False,
             )
             multi = hasattr(df.columns, "levels")
             for s in syms:
                 try:
                     c = (df[s]["Close"] if multi else df["Close"]).dropna()
-                    if len(c):
-                        px[s] = {
-                            "last": float(c.iloc[-1]),
-                            "prev": float(c.iloc[-2]) if len(c) > 1 else float(c.iloc[-1]),
-                            "spark": [round(float(x), 4) for x in c.tolist()][-30:],
-                        }
+                    if not len(c):
+                        continue
+                    last_is_today = c.index[-1].date() >= et_today
+                    prev = (
+                        float(c.iloc[-2])
+                        if (last_is_today and len(c) > 1)
+                        else float(c.iloc[-1])
+                    )
+                    px[s] = {
+                        "last": float(c.iloc[-1]),
+                        "prev": prev,
+                        "spark": [round(float(x), 4) for x in c.tolist()][-30:],
+                    }
                 except Exception:
                     continue
         except Exception as e:
-            logger.warning("batch price failed (%s): %s", syms, e)
+            logger.warning("batch daily price failed (%s): %s", syms, e)
 
-    from concurrent.futures import ThreadPoolExecutor
+    def _intraday(syms):
+        if not syms:
+            return
+        try:
+            df = yf.download(
+                syms, period="1d", interval="1m", progress=False,
+                group_by="ticker", threads=True, auto_adjust=False,
+            )
+            multi = hasattr(df.columns, "levels")
+            for s in syms:
+                try:
+                    c = (df[s]["Close"] if multi else df["Close"]).dropna()
+                    if len(c) and s in px:
+                        px[s]["last"] = float(c.iloc[-1])
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug("batch intraday price failed (%s): %s", syms, e)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(_load, [us, kr]))
+        list(pool.map(_daily, [us, kr]))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(_intraday, [us, kr]))
     return px
 
 

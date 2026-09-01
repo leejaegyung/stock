@@ -980,6 +980,8 @@ let _panel = 'home';
 let _homeWatchlist = [];
 let _stockSel = null;         // {ticker, market} — 홈 중앙 차트 선택 종목
 let _stockRange = '3개월';
+let _pricePollTimer = null;   // 관심목록 시세 자동 갱신
+let _pxUpdatedAt = 0;
 
 const pageTitles = {
   home:'대시보드', reports:'분석 보고서', news:'뉴스 피드', outlook:'시장 전망',
@@ -1054,6 +1056,7 @@ function hideTip(){ if (_tipEl) _tipEl.style.display = 'none'; }
 const PANELS = ['home','reports','news','outlook','finance','watchlist','apikeys','settings'];
 function nav(name, btn){
   if (!PANELS.includes(name)) name = 'home';
+  if (name !== 'home') clearInterval(_pricePollTimer);
   _panel = name;
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -1112,19 +1115,39 @@ async function loadHomeData(){
   // 2단계 — 시세(portfolio)는 뒤따라 채움
   api('/api/portfolio').then(pf => {
     pf = pf || [];
-    _pfMap = {}; pf.forEach(p => { _pfMap[p.ticker + '-' + p.market] = p; });
-    renderHomeWatchlist(d.watchlist);      // 이제 가격·스파크라인 포함
-    renderHomeAccount(pf);
-    renderHomePositions(pf, d.watchlist);
+    applyPortfolio(pf);
     const held = pf.filter(p => (p.quantity || 0) > 0).sort((a,b) => (b.current_value || 0) - (a.current_value || 0));
     const pick = held[0] || d.watchlist[0];
     if (pick && (!_stockSel || !d.watchlist.find(s => s.ticker === _stockSel.ticker && s.market === _stockSel.market))){
       _stockSel = { ticker: pick.ticker, market: pick.market };
     }
     if (_stockSel){ loadStockDetail(); renderHomeAI(d.watchlist); }
+    startPricePoll();
   }).catch(() => {
     document.getElementById('home-account').innerHTML = `<div style="padding:12px;font-size:11px;color:var(--mute)">시세를 불러오지 못했습니다.</div>`;
   });
+}
+
+/* 관심목록 시세 자동 갱신 (yfinance 기준, 약 15분 지연 데이터) */
+function applyPortfolio(pf){
+  _pfMap = {}; pf.forEach(p => { _pfMap[p.ticker + '-' + p.market] = p; });
+  _pxUpdatedAt = Date.now();
+  renderHomeWatchlist(_homeWatchlist);
+  renderHomeAccount(pf);
+  renderHomePositions(pf, _homeWatchlist);
+  // 선택 종목 헤더 가격만 갱신 (차트는 그대로)
+  if (_stockSel){
+    const s = _stockSel, wl = _homeWatchlist.find(x => x.ticker === s.ticker && x.market === s.market);
+    const headEl = document.getElementById('stock-detail-head');
+    if (headEl && wl) headEl.innerHTML = renderStockHead(s, _pfMap[s.ticker + '-' + s.market], wl);
+  }
+}
+function startPricePoll(){
+  clearInterval(_pricePollTimer);
+  _pricePollTimer = setInterval(() => {
+    if (_panel !== 'home' || document.hidden) return;
+    api('/api/portfolio').then(pf => { if (pf && pf.length) applyPortfolio(pf); }).catch(()=>{});
+  }, 60000);
 }
 function pollMacro(){
   clearInterval(_macroPollTimer);
@@ -1199,7 +1222,9 @@ function renderHomeWatchlist(list){
       <div style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="nav('watchlist',document.querySelector('[data-panel=watchlist]'))">종목 추가</button></div></div>`;
     return;
   }
-  cnt.textContent = `${list.length}종목`;
+  cnt.textContent = _pxUpdatedAt
+    ? `${list.length}종목 · ${new Date(_pxUpdatedAt).toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', second:'2-digit'})} 기준`
+    : `${list.length}종목`;
   el.innerHTML = list.map(s => {
     const pf = _pfMap[s.ticker + '-' + s.market], r = s.report;
     const sel = _stockSel && _stockSel.ticker === s.ticker && _stockSel.market === s.market;
