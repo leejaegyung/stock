@@ -1569,9 +1569,21 @@ function renderHomeAI(watchlist){
   if (M.valuation && M.valuation !== '-') kv.push(['밸류에이션', String(M.valuation).split('|')[0].trim(), 'var(--warn)']);
   const reasons = (M.key_reasons && M.key_reasons.length) ? M.key_reasons : [];
   const warns = (M.warnings && M.warnings.length) ? M.warnings : [];
+  const tp = M.trade_plan;
+  const fmtP = v => top.market === 'US'
+    ? '$' + Number(v).toLocaleString('en-US', {maximumFractionDigits:2})
+    : '₩' + Math.round(v).toLocaleString('ko-KR');
+  const tpHtml = tp ? `
+    <div style="display:flex;flex-wrap:wrap;gap:4px 12px;padding:7px 10px;border-bottom:1px solid var(--line);font-size:10.5px;font-variant-numeric:tabular-nums">
+      <span><span style="color:var(--mute)">매수 </span><b>${fmtP(tp.entry_low)}~${fmtP(tp.entry_high)}</b></span>
+      <span><span style="color:var(--mute)">목표 </span><b style="color:var(--up)">${fmtP(tp.target1)}</b></span>
+      <span><span style="color:var(--mute)">손절 </span><b style="color:var(--accent-strong)">${fmtP(tp.stop)}</b></span>
+      ${tp.rr ? `<span style="color:var(--mute)">손익비 ${tp.rr}:1</span>` : ''}
+    </div>` : '';
   body.style.padding = '0';
   body.innerHTML = `
     ${kv.length ? `<div class="kv-grid">${kv.map(([k,v,c]) => `<div class="kv-cell"><div class="k">${k}</div><div class="v" style="color:${c}">${esc(v)}</div></div>`).join('')}</div>` : ''}
+    ${tpHtml}
     <div style="padding:8px 10px">
       ${reasons.map(t => `<div class="reason"><span class="b">•</span><span>${esc(t)}</span></div>`).join('') || '<div style="font-size:11px;color:var(--mute)">근거는 전문 보기에서 확인하세요.</div>'}
       ${warns.length ? `<div class="warn-banner"><span>⚠</span><span>${esc(warns[0])}</span></div>` : ''}

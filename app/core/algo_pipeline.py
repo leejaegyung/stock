@@ -16,6 +16,7 @@ from app.core.formulas import (
 )
 from app.core.datasources.us import USDataSource
 from app.core.datasources.kr import KRDataSource
+from app.core.trade_plan import fmt_px, trade_plan, trade_plan_md
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,20 @@ def _technical_indicators(df: pd.DataFrame) -> dict:
     vol_ratio = (float(vol.iloc[-1]) / float(vol.rolling(20).mean().iloc[-1])
                  if not vol.empty and len(vol) >= 20 else None)
 
+    # ATR(14) · 스윙 고저 — 매매 가격대 계산용
+    has_hl = {"High", "Low"}.issubset(df.columns)
+    if has_hl:
+        high, low = df["High"].astype(float), df["Low"].astype(float)
+        prev_c = close.shift()
+        tr = pd.concat([(high - low), (high - prev_c).abs(), (low - prev_c).abs()], axis=1).max(axis=1)
+        atr14 = float(tr.rolling(14).mean().iloc[-1]) if len(tr) >= 14 else float(tr.mean())
+        hi_20 = float(high.tail(20).max()); lo_20 = float(low.tail(20).min())
+        hi_52w = float(high.tail(252).max()); lo_52w = float(low.tail(252).min())
+    else:
+        atr14 = float(close.diff().abs().rolling(14).mean().iloc[-1]) if len(close) >= 14 else price * 0.02
+        hi_20 = float(close.tail(20).max()); lo_20 = float(close.tail(20).min())
+        hi_52w = float(close.tail(252).max()); lo_52w = float(close.tail(252).min())
+
     return {
         "ok": True, "price": price,
         "rsi": round(rsi_val, 1),
@@ -114,6 +129,9 @@ def _technical_indicators(df: pd.DataFrame) -> dict:
         "sma20": round(sma20, 2), "sma50": round(sma50, 2),
         "sma200": round(sma200, 2) if sma200 else None,
         "bb_upper": round(bb_upper, 2), "bb_lower": round(bb_lower, 2),
+        "atr14": round(atr14, 2) if atr14 else None,
+        "hi_20": round(hi_20, 2), "lo_20": round(lo_20, 2),
+        "hi_52w": round(hi_52w, 2), "lo_52w": round(lo_52w, 2),
         "ret_1m": round(ret_1m, 1) if ret_1m is not None else None,
         "ret_3m": round(ret_3m, 1) if ret_3m is not None else None,
         "ret_6m": round(ret_6m, 1) if ret_6m is not None else None,
@@ -457,6 +475,7 @@ def _stock_report_md(
     bulls: list[str], bears: list[str],
     quant: dict, news_lines: list[str],
     conf: dict | None = None,
+    tplan: dict | None = None,
 ) -> str:
     total = ts + fs + ms + ns
     vd, _band_cf = _verdict(total)
@@ -530,6 +549,9 @@ def _stock_report_md(
         f"- _{quant['ev_assumption']}_",
         "",
     ]
+
+    # 매매 타이밍·가격
+    L += trade_plan_md(tplan, market)
 
     # Bull / Bear
     if bulls:
@@ -621,12 +643,15 @@ def analyze_stock_algo(
     conf["hints"] = improvement_hints(conf, coverage, len(news), market)
     cf = conf["grade"]
 
+    # Layer 3c — 매매 타이밍·가격대
+    tplan = trade_plan(ta, quant, vd)
+
     # Layer 4 — 리포트
     report_md = _stock_report_md(
         ticker, market, date_str,
         ta, fund, macro,
         ts, fs, ms, ns,
-        bulls, bears, quant, news_lines, conf,
+        bulls, bears, quant, news_lines, conf, tplan,
     )
 
     key_reasons = (bulls if vd in ("매수", "추가매수") else bears)[:3]
@@ -645,6 +670,7 @@ def analyze_stock_algo(
         "bull_signals":    bulls,
         "bear_signals":    bears,
         "quant_risk":      quant,
+        "trade_plan":      tplan,
         "confidence":      conf,
         "research_summary": {
             "verdict": f"강세 신호 {len(bulls)}개 / 약세 신호 {len(bears)}개",
@@ -736,6 +762,12 @@ def _format_brief(date_str: str, macro: dict, results: list[dict]) -> str:
             f"- 기대값: {quant.get('ev', '-')}% | 켈리 권장비중: {quant.get('half_kelly', '-')}% (하프켈리)"
         )
         L.append(f"- 밸류에이션: {quant.get('valuation', '-')}")
+        tp = r.get("trade_plan")
+        if tp:
+            L.append(
+                f"- 매매: {fmt_px(tp['entry_low'], market)}~{fmt_px(tp['entry_high'], market)} 매수 "
+                f"· 목표 {fmt_px(tp['target1'], market)} · 손절 {fmt_px(tp['stop'], market)}"
+            )
         if quant.get("cashflow_pattern"):
             L.append(f"- 현금흐름: {quant['cashflow_pattern']}")
         for w in advice.get("warnings", [])[:2]:

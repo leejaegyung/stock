@@ -45,6 +45,8 @@ app/core/confidence.py           — 분석 확신도 모델 순수 함수 (Laye
 app/core/translate.py            — 외신 뉴스 한국어 자동 번역 (유틸): 언어감지 + 기계번역(gtx/MyMemory)
                                    체인. LLM 미사용. 원문·원문링크 보존, 결과는 NewsItem 에 캐시
 app/core/market_scan.py          — 시장 국면·섹터 모멘텀 순수 함수 (Layer 1)
+app/core/trade_plan.py           — 매매 타이밍·가격대 순수 함수 (Layer 1): 이동평균·볼린저·ATR·
+                                   스윙 고저 → 매수 구간/분할 추가매수/목표가/손절가/손익비. 리포트에 삽입
 app/core/quant.py                — 포트폴리오 계량 분석 순수 함수 (Layer 1): 변동성·샤프·소르티노·
                                    MDD·VaR·베타·상관·분산비율·비중 최적화(동일/역변동성/리스크패리티/
                                    최소분산)·리밸런싱 백테스트. gs-quant timeseries 스타일, 외부 API 없음
