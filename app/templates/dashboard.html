@@ -510,6 +510,18 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
 .m-actbar button{border:none;border-radius:12px;font-family:inherit;font-size:15px;font-weight:700;height:48px;cursor:pointer;letter-spacing:-.02em}
 .m-skel{background:linear-gradient(90deg,var(--chip) 25%,var(--card-2) 50%,var(--chip) 75%);background-size:200% 100%;animation:msk 1.3s linear infinite;border-radius:10px}
 @keyframes msk{to{background-position:-200% 0}}
+#m-sheet{display:none;position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.42);align-items:flex-end;justify-content:center;overscroll-behavior:contain}
+#m-sheet.open{display:flex}
+#m-sheet-card{width:100%;max-width:640px;background:var(--card);border-radius:20px 20px 0 0;padding:8px 20px calc(24px + env(safe-area-inset-bottom));max-height:88dvh;overflow-y:auto}
+#m-sheet-card .grip{width:36px;height:4px;border-radius:2px;background:var(--line-2);margin:6px auto 12px}
+.m-inp{width:100%;height:46px;border:1px solid var(--line-2);border-radius:12px;background:var(--input);color:var(--ink);font-family:inherit;font-size:15px;padding:0 14px;letter-spacing:-.01em}
+.m-inp:focus{outline:none;border-color:var(--accent)}
+.m-seg{display:flex;background:var(--chip);border-radius:12px;padding:3px;gap:2px}
+.m-seg button{flex:1;border:none;border-radius:9px;font-family:inherit;font-size:14px;font-weight:600;height:40px;cursor:pointer;background:transparent;color:var(--mute)}
+.m-seg button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 2px var(--shadow)}
+.m-btn-primary{width:100%;height:50px;border:none;border-radius:13px;background:var(--accent);color:#fff;font-family:inherit;font-size:16px;font-weight:700;letter-spacing:-.02em;cursor:pointer}
+.m-btn-primary:disabled{background:var(--chip);color:var(--faint)}
+.m-del{width:30px;height:30px;border:none;border-radius:9px;background:var(--up-a10);color:var(--up);font-size:16px;font-weight:700;flex-shrink:0;cursor:pointer}
 </style>
 </head>
 <body>
@@ -990,6 +1002,7 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
   <div class="m-scroll" id="m-view"></div>
   <nav class="m-tabbar" id="m-tabbar"></nav>
 </div>
+<div id="m-sheet" onclick="if(event.target===this)mbCloseSheet()"><div id="m-sheet-card"></div></div>
 
 <div id="modal-bg" onclick="modalBgClick(event)">
   <div id="modal">
@@ -2235,7 +2248,7 @@ async function showReport(id){
   } catch(e){ document.getElementById('modal-body').innerHTML = `<p style="color:var(--up)">${esc(e.message)}</p>`; }
 }
 function modalBgClick(e){ if (e.target === document.getElementById('modal-bg')) closeModal(); }
-let _modalOpen = false, _navSuppress = false;
+let _modalOpen = false, _navSuppress = false, _mbSheetOpen = false;
 function openModal(){
   if (_modalOpen) return;
   _modalOpen = true;
@@ -2255,27 +2268,21 @@ function closeModal(){
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
-/* ── 안드로이드 뒤로가기: 모달·모바일 화면 이동을 히스토리와 연결 ── */
-window.addEventListener('popstate', () => {
+/* ── 안드로이드 뒤로가기: 모달·시트·모바일 화면 이동을 히스토리와 연결 ──
+   mbNav 가 화면마다 pushState 하고, popstate 에서 e.state 로 화면을 복원한다.
+   루트(부팅 시 replaceState) 에서 한 번 더 뒤로가기 → 브라우저가 이전 페이지로
+   이동(= 앱 종료). */
+window.addEventListener('popstate', (e) => {
   if (_navSuppress){ _navSuppress = false; return; }
   if (_modalOpen){ _hideModal(); return; }
-  if (MB_MQ.matches) mbBack();
+  if (_mbSheetOpen){ _mbHideSheet(); return; }
+  if (!MB_MQ.matches) return;
+  const st = e.state;
+  if (!st || !st.v) return;              // 앱 밖으로 나가는 중
+  MB.stockView = st.sv || 'list';
+  MB.sel = st.sel || MB.sel;
+  mbNav(st.v, null, true);
 });
-function mbBack(){
-  if (MB.view === 'stock' && MB.stockView === 'detail'){
-    MB.stockView = 'list';
-    mbNav('stock');
-    _pushTrap();
-    return;
-  }
-  if (MB.view !== 'home'){
-    mbNav('home');
-    _pushTrap();
-    return;
-  }
-  // 홈 루트 — 브라우저가 이미 이전 페이지로 이동한 상태(앱 종료). 그대로 둔다.
-}
-function _pushTrap(){ try { history.pushState({ mb: 1 }, ''); } catch(e) {} }
 async function copyModal(){ try { await navigator.clipboard.writeText(_modalRaw); toast('복사됨'); } catch { toast('복사 실패', 'err'); } }
 
 /* ══ 가계부 & 자산 ════════════════════════════════════════════════════════ */
@@ -3103,14 +3110,23 @@ function mbRenderTabbar(){
   }).join('');
 }
 function mbTapStock(){ MB.stockView = 'list'; mbNav('stock'); }
-function mbNav(view, sel){
+function _mbSameState(view){
+  const s = history.state;
+  return s && s.v === view && (view !== 'stock' || (s.sv === MB.stockView &&
+    JSON.stringify(s.sel || null) === JSON.stringify(MB.sel || null)));
+}
+function mbNav(view, sel, fromPop){
   if (view === 'stock'){
     if (sel){ MB.sel = sel; MB.stockView = 'detail'; }
     else if (!MB.stockView) MB.stockView = 'list';
   }
   MB.view = view;
+  if (!fromPop && MB_MQ.matches && !_mbSameState(view)){
+    history.pushState({ v: view, sv: MB.stockView, sel: MB.sel }, '');
+  }
   mbRenderTabbar();
-  document.getElementById('m-view').scrollTop = 0;
+  const vw = document.getElementById('m-view');
+  if (vw) vw.scrollTop = 0;
   const render = {
     home: mbHome,
     stock: () => (MB.stockView === 'detail' && MB.sel) ? mbStock() : mbStockList(),
@@ -3118,7 +3134,127 @@ function mbNav(view, sel){
   }[view] || mbHome;
   render();
 }
-function mbBackToList(){ MB.stockView = 'list'; mbNav('stock'); }
+function mbBackToList(){
+  if (history.state && history.state.v === 'stock' && history.state.sv === 'detail'){ history.back(); return; }
+  MB.stockView = 'list'; mbNav('stock');
+}
+
+/* ── 바텀 시트 ── */
+function mbOpenSheet(inner){
+  document.getElementById('m-sheet-card').innerHTML = `<div class="grip"></div>${inner}`;
+  document.getElementById('m-sheet').classList.add('open');
+  document.documentElement.classList.add('modal-lock');
+  _mbSheetOpen = true;
+  try { history.pushState({ sheet: true }, ''); } catch(e) {}
+}
+function _mbHideSheet(){
+  _mbSheetOpen = false;
+  document.getElementById('m-sheet').classList.remove('open');
+  if (!_modalOpen) document.documentElement.classList.remove('modal-lock');
+}
+function mbCloseSheet(){
+  if (!_mbSheetOpen) return;
+  _mbHideSheet();
+  if (history.state && history.state.sheet){ _navSuppress = true; history.back(); }
+}
+
+/* ── 관심종목 추가 / 삭제 ── */
+function mbOpenAddSheet(){
+  MB._addMarket = MB._addMarket || 'US';
+  mbOpenSheet(`
+    <div style="font-size:18px;font-weight:700;letter-spacing:-.025em;margin-bottom:14px">관심종목 추가</div>
+    <div class="m-seg" style="margin-bottom:10px">
+      <button class="${MB._addMarket === 'US' ? 'on' : ''}" onclick="mbAddMarket('US')">미국</button>
+      <button class="${MB._addMarket === 'KR' ? 'on' : ''}" onclick="mbAddMarket('KR')">한국</button>
+    </div>
+    <input class="m-inp" id="m-add-ticker" placeholder="${MB._addMarket === 'US' ? '티커 (예: AAPL)' : '종목코드 (예: 005930)'}"
+      autocapitalize="characters" autocomplete="off" oninput="mbAddNameLookup()" style="margin-bottom:8px">
+    <div id="m-add-name" style="font-size:12.5px;color:var(--mute);min-height:18px;margin-bottom:12px;padding-left:2px"></div>
+    <button class="m-btn-primary" id="m-add-btn" onclick="mbAddStock()">추가</button>
+  `);
+  setTimeout(() => { const i = document.getElementById('m-add-ticker'); if (i) i.focus(); }, 60);
+}
+function mbAddMarket(m){ MB._addMarket = m; mbOpenAddSheet(); }
+let _mbNameTimer = null;
+function mbAddNameLookup(){
+  clearTimeout(_mbNameTimer);
+  const t = (document.getElementById('m-add-ticker').value || '').trim();
+  const st = document.getElementById('m-add-name');
+  if (!t){ st.textContent = ''; return; }
+  _mbNameTimer = setTimeout(async () => {
+    st.textContent = '조회 중…';
+    try {
+      const d = await api(`/api/stock-info/${encodeURIComponent(t)}?market=${MB._addMarket}`);
+      st.textContent = d.name ? `✓ ${d.name}` : '이름을 찾지 못했습니다 (그래도 추가 가능)';
+      st.style.color = d.name ? 'var(--up)' : 'var(--mute)';
+      MB._addName = d.name || '';
+    } catch { st.textContent = ''; MB._addName = ''; }
+  }, 500);
+}
+async function mbAddStock(){
+  const ticker = (document.getElementById('m-add-ticker').value || '').trim().toUpperCase();
+  if (!ticker) return;
+  const market = MB._addMarket;
+  const btn = document.getElementById('m-add-btn');
+  btn.disabled = true; btn.textContent = '추가 중…';
+  try {
+    let name = MB._addName || ticker;
+    if (!MB._addName){
+      try { const d = await api(`/api/stock-info/${encodeURIComponent(ticker)}?market=${market}`); name = d.name || ticker; } catch {}
+    }
+    await api('/api/watchlist', { method: 'POST', body: JSON.stringify({ ticker, market, name }) });
+    toast(`${ticker} 추가됨`);
+    MB._addName = '';
+    mbCloseSheet();
+    MB.home = null;
+    if (MB.view === 'home') mbHome();
+    else if (MB.view === 'stock') mbNav('stock', null, true);
+  } catch (e) {
+    toast(e.message === 'Already exists' ? `${ticker}는 이미 목록에 있습니다` : e.message, 'err');
+    btn.disabled = false; btn.textContent = '추가';
+  }
+}
+function mbToggleWlEdit(){ MB.wlEdit = !MB.wlEdit; (MB.view === 'home' ? mbHome : mbStockList)(); }
+async function mbRemoveStock(ticker, market, name){
+  if (!confirm(`${name || ticker} 삭제할까요?`)) return;
+  try {
+    await api(`/api/watchlist/${ticker}?market=${market}`, { method: 'DELETE' });
+    toast(`${ticker} 삭제됨`);
+    MB.home = null;
+    if (MB.sel && MB.sel.ticker === ticker) MB.sel = null;
+    (MB.view === 'home' ? mbHome : mbStockList)();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ── 분석 / 재분석 ── */
+async function mbAnalyzeTicker(ticker, market, onDone){
+  if (MB._analyzing && MB._analyzing[ticker + market]){ toast('이미 분석 중입니다'); return; }
+  MB._analyzing = MB._analyzing || {};
+  MB._analyzing[ticker + market] = true;
+  try {
+    await api(`/api/analyze/${ticker}?market=${market}`, { method: 'POST' });
+    toast(`${ticker} 분석 시작 — 3~5분 소요`);
+    const prev = ((MB.home && MB.home.watchlist) || []).find(x => x.ticker === ticker && x.market === market);
+    const prevId = prev && prev.report && prev.report.id;
+    let n = 0;
+    const iv = setInterval(async () => {
+      if (++n > 72){ clearInterval(iv); delete MB._analyzing[ticker + market]; return; }
+      const h = await api('/api/home').catch(() => null);
+      if (!h) return;
+      const w = h.watchlist.find(x => x.ticker === ticker && x.market === market);
+      if (w && w.report && w.report.id !== prevId){
+        clearInterval(iv); delete MB._analyzing[ticker + market];
+        MB.home = h; toast(`${ticker} 분석 완료`);
+        if (onDone) onDone();
+        else if (MB.view === 'stock') mbNav('stock', null, true);
+        else if (MB.view === 'home') mbHome();
+      }
+    }, 5000);
+  } catch (e) {
+    delete MB._analyzing[ticker + market];
+    toast(e.message, 'err');
+  }
+}
 function mbSkel(n){
   return `<div class="m-pad">${Array.from({length:n||3}, () => '<div class="m-skel" style="height:64px;margin-bottom:10px"></div>').join('')}</div>`;
 }
@@ -3183,7 +3319,8 @@ async function mbHome(){
       const p = MB.pf[s.ticker + '-' + s.market];
       const dc = mbDayChg(p);
       const spark = p && p.sparkline && p.sparkline.length > 2;
-      return `<div class="m-wlrow" onclick="mbNav('stock',{ticker:'${esc(s.ticker)}',market:'${s.market}'})">
+      const ed = MB.wlEdit;
+      return `<div class="m-wlrow"${ed ? '' : ` onclick="mbNav('stock',{ticker:'${esc(s.ticker)}',market:'${s.market}'})"`}>
         <div class="m-ini">${esc(mbInitials(s.name, s.ticker))}</div>
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;gap:5px">
@@ -3192,11 +3329,12 @@ async function mbHome(){
           </div>
           <div style="font-size:12px;color:var(--mute);font-variant-numeric:tabular-nums">${esc(s.ticker)}</div>
         </div>
+        ${ed ? `<button class="m-del" onclick="event.stopPropagation();mbRemoveStock('${esc(s.ticker)}','${s.market}','${esc(s.name || s.ticker)}')">×</button>` : `
         ${spark ? mbSpark(p.sparkline, 52, 24, mbCol(dc)) : `<span style="width:52px;flex-shrink:0"></span>`}
         <div style="text-align:right;min-width:74px">
           <div style="font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em">${p ? mbPrice(p) : '—'}</div>
           <div style="font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;color:${mbCol(dc)}">${dc == null ? '' : mbPct(dc)}</div>
-        </div>
+        </div>`}
       </div>`;
     }).join('');
 
@@ -3219,13 +3357,15 @@ async function mbHome(){
         </div>
       </div>
       ${briefCard}
-      <div class="m-sec"><b>관심종목</b><a onclick="mbShowWatchlistHint()">${(home.watchlist || []).length}종목</a></div>
-      <div class="m-pad"><div class="m-card" style="overflow:hidden">${wl || '<div style="padding:24px;text-align:center;color:var(--mute);font-size:13px">관심종목이 없습니다</div>'}</div></div>`;
+      <div class="m-sec"><b>관심종목</b>
+        ${(home.watchlist || []).length ? `<a onclick="mbToggleWlEdit()">${MB.wlEdit ? '완료' : '편집'}</a>` : ''}
+        <a onclick="mbOpenAddSheet()" style="margin-left:12px">＋ 추가</a>
+      </div>
+      <div class="m-pad"><div class="m-card" style="overflow:hidden">${wl || '<div style="padding:20px;text-align:center;color:var(--mute);font-size:13px">관심종목이 없습니다<br><button class="m-filter" style="margin-top:10px;background:var(--accent);color:#fff" onclick="mbOpenAddSheet()">＋ 종목 추가</button></div>'}</div></div>`;
   } catch (e) {
     el.innerHTML = `<div class="m-pad"><div class="m-card" style="padding:20px;color:var(--up);font-size:13px">오류: ${esc(e.message)}</div></div>`;
   }
 }
-function mbShowWatchlistHint(){ toast('관심종목 추가·수정은 PC 화면에서 가능합니다'); }
 async function mbRunBrief(){
   try { await api('/api/brief', { method: 'POST' }); toast('브리핑 생성 시작 (몇 분 소요)'); }
   catch (e) { toast(e.message, 'err'); }
@@ -3267,7 +3407,17 @@ async function mbStockList(){
       const dc = mbDayChg(p);
       const ev = M.ev;
       const cs = M.confidence_score;
-      return `<div class="m-wlrow" onclick="mbNav('stock',{ticker:'${esc(s.ticker)}',market:'${s.market}'})">
+      const ed = MB.wlEdit;
+      const busy = MB._analyzing && MB._analyzing[s.ticker + s.market];
+      let right;
+      if (ed) right = `<button class="m-del" onclick="event.stopPropagation();mbRemoveStock('${esc(s.ticker)}','${s.market}','${esc(s.name || s.ticker)}')">×</button>`;
+      else if (busy) right = `<span style="font-size:12px;color:var(--accent);font-weight:600">분석중…</span>`;
+      else if (!s.report) right = `<button class="m-filter" style="height:30px;background:var(--accent);color:#fff" onclick="event.stopPropagation();mbAnalyzeTicker('${esc(s.ticker)}','${s.market}')">분석</button>`;
+      else right = `<div style="text-align:right;min-width:66px">
+          <div style="font-size:14.5px;font-weight:600;font-variant-numeric:tabular-nums">${p ? mbPrice(p) : '—'}</div>
+          <div style="font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:${mbCol(dc)}">${dc == null ? '' : mbPct(dc)}</div>
+        </div>`;
+      return `<div class="m-wlrow"${ed ? '' : ` onclick="mbNav('stock',{ticker:'${esc(s.ticker)}',market:'${s.market}'})"`}>
         <div class="m-ini">${esc(mbInitials(s.name, s.ticker))}</div>
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;gap:5px">
@@ -3278,15 +3428,15 @@ async function mbStockList(){
             ${esc(s.ticker)}${ev != null ? ` · EV ${ev >= 0 ? '+' : ''}${ev}%` : ''}${cs != null ? ` · 확신도 ${cs}` : ''}
           </div>
         </div>
-        <div style="text-align:right;min-width:66px">
-          <div style="font-size:14.5px;font-weight:600;font-variant-numeric:tabular-nums">${p ? mbPrice(p) : '—'}</div>
-          <div style="font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:${mbCol(dc)}">${dc == null ? '' : mbPct(dc)}</div>
-        </div>
+        ${right}
       </div>`;
     };
 
     el.innerHTML = `
-      <div class="m-sec" style="padding-top:8px"><b>분석 보고서</b><span style="font-size:13px;color:var(--mute)">${analyzed.length}종목</span></div>
+      <div class="m-sec" style="padding-top:8px"><b>분석 보고서</b>
+        <a onclick="mbToggleWlEdit()">${MB.wlEdit ? '완료' : '편집'}</a>
+        <a onclick="mbOpenAddSheet()" style="margin-left:12px">＋ 추가</a>
+      </div>
       <div class="m-hscroll">
         ${filters.map(x => `<button class="m-filter${x === f ? ' on' : ''}" onclick="mbSetReportFilter('${x}')">${x}${x !== '전체' && cnt(x) ? ` ${cnt(x)}` : ''}</button>`).join('')}
       </div>
@@ -3315,6 +3465,7 @@ async function mbStock(){
   const ms = MB_MSTATE[p && p.market_state] || MB_MSTATE.CLOSED;
   const dc = mbDayChg(p);
   const diff = (p && p.current_price_orig != null && p.prev_close != null) ? (p.current_price_orig - p.prev_close) : null;
+  const busy = MB._analyzing && MB._analyzing[s.ticker + s.market];
 
   el.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;padding:2px 16px 12px">
@@ -3323,7 +3474,6 @@ async function mbStock(){
         <div style="font-size:16px;font-weight:700;letter-spacing:-.025em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</div>
         <div style="font-size:12px;color:var(--mute);font-variant-numeric:tabular-nums">${esc(s.ticker)} · ${s.market === 'US' ? '미국' : '한국'}</div>
       </div>
-      <button class="m-icbtn" style="color:var(--warn)" onclick="mbAnalyze()">↻</button>
     </div>
     <div class="m-pad" style="padding-bottom:12px">
       <div style="display:flex;align-items:baseline;gap:8px">
@@ -3344,15 +3494,16 @@ async function mbStock(){
           <span style="font-size:16px;font-weight:700;letter-spacing:-.025em;flex:1">AI 분석 결론</span>
           ${mbVerdict(rep && rep.verdict)}
         </div>
-        ${rep ? mbReportBody(M, rep, s.market) : `<div style="padding:22px 16px;text-align:center;color:var(--mute);font-size:13px">아직 분석 리포트가 없습니다<br><button class="m-filter" style="margin-top:10px;background:var(--accent);color:#fff" onclick="mbAnalyze()">지금 분석</button></div>`}
+        ${rep ? mbReportBody(M, rep, s.market)
+          : `<div style="padding:22px 16px;text-align:center;color:var(--mute);font-size:13px">${busy ? '분석 진행 중… (3~5분)' : '아직 분석 리포트가 없습니다'}<br><button class="m-filter" style="margin-top:10px;background:var(--accent);color:#fff" ${busy ? 'disabled' : 'onclick="mbAnalyze()"'}>${busy ? '분석 중…' : '지금 분석'}</button></div>`}
       </div>
     </div>
     <div class="m-sec"><b>관련 뉴스</b></div>
     <div class="m-pad"><div class="m-card" id="m-stock-news" style="overflow:hidden"><div class="m-skel" style="height:60px;margin:12px"></div></div></div>
     <div style="height:8px"></div>
     <div class="m-actbar">
-      <button style="flex:1;background:var(--chip);color:var(--sub)" onclick="mbAnalyze()">재분석</button>
-      <button style="flex:2;background:${MB_VC[rep && rep.verdict] || 'var(--accent)'};color:#fff" ${rep ? `onclick="showReport(${rep.id})"` : 'disabled style="flex:2;background:var(--chip);color:var(--faint)"'}>보고서 전문 보기</button>
+      <button style="flex:1;background:var(--chip);color:var(--sub)" ${busy ? 'disabled' : 'onclick="mbAnalyze()"'}>${busy ? '분석 중…' : (rep ? '재분석' : '분석')}</button>
+      <button style="flex:2;background:${rep ? (MB_VC[rep.verdict] || 'var(--accent)') : 'var(--chip)'};color:${rep ? '#fff' : 'var(--faint)'}" ${rep ? `onclick="showReport(${rep.id})"` : 'disabled'}>보고서 전문 보기</button>
     </div>`;
 
   mbLoadChart();
@@ -3428,24 +3579,11 @@ async function mbLoadStockNews(ticker){
       </div>`).join('') : '<div style="padding:20px 16px;text-align:center;color:var(--mute);font-size:12.5px">관련 뉴스 없음</div>';
   } catch { box.innerHTML = ''; }
 }
-async function mbAnalyze(){
+function mbAnalyze(){
   const s = MB.sel;
   if (!s) return;
-  try {
-    await api(`/api/analyze/${s.ticker}?market=${s.market}`, { method: 'POST' });
-    toast(`${s.ticker} 분석 시작 (3~5분)`);
-    let n = 0;
-    const iv = setInterval(async () => {
-      if (++n > 60 || MB.view !== 'stock'){ clearInterval(iv); return; }
-      const h = await api('/api/home').catch(() => null);
-      if (!h) return;
-      const w = h.watchlist.find(x => x.ticker === s.ticker && x.market === s.market);
-      const old = (MB.home.watchlist.find(x => x.ticker === s.ticker && x.market === s.market) || {}).report;
-      if (w && w.report && (!old || w.report.id !== old.id)){
-        clearInterval(iv); MB.home = h; toast(`${s.ticker} 분석 완료`); mbStock();
-      }
-    }, 5000);
-  } catch (e) { toast(e.message, 'err'); }
+  mbAnalyzeTicker(s.ticker, s.market, () => { if (MB.view === 'stock') mbStock(); });
+  if (MB.view === 'stock' && MB.stockView === 'detail') mbStock();  // '분석중' 상태 즉시 반영
 }
 
 /* ── 내 자산 ── */
@@ -3626,8 +3764,8 @@ async function mbNews(){
 function mbBoot(){
   mbThemeBtn();
   mbRenderTabbar();
-  mbNav('home');
-  _pushTrap();          // 안드로이드 뒤로가기 트랩
+  try { history.replaceState({ v: 'home', sv: 'list', sel: null, root: true }, ''); } catch(e) {}
+  mbNav('home', null, true);   // 루트 렌더 (push 안 함)
   clearInterval(MB.poll);
   MB.poll = setInterval(() => {
     if (document.hidden || !MB_MQ.matches) return;
