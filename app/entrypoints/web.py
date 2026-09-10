@@ -383,6 +383,7 @@ def _report_metrics(result: dict) -> dict:
         "confidence_factors": conf.get("factors"),
         "confidence_reasons": conf.get("reasons"),
         "confidence_hints": conf.get("hints"),
+        "analyst": conf.get("analyst"),
         "score_technical": scores.get("technical"),
         "score_fundamental": scores.get("fundamental"),
         "score_macro": scores.get("macro"),

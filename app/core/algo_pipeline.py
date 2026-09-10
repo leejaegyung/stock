@@ -251,6 +251,13 @@ def _score_fundamental(fund: dict) -> tuple[int, list[str]]:
         elif dp > 2:  score += 2; notes.append(f"배당수익률 {dp:.2f}% — 양호")
         else:         score += 1; notes.append(f"배당수익률 {dp:.2f}%")
 
+    # PEG (성장 대비 밸류에이션, -2 ~ +3) — 높은 P/E가 성장으로 정당화되는지
+    peg = info.get("pegRatio") or info.get("trailingPegRatio")
+    if peg and peg > 0:
+        if   peg < 1.0:  score += 3; notes.append(f"PEG {peg:.2f} — 성장 대비 저평가")
+        elif peg < 1.5:  score += 1; notes.append(f"PEG {peg:.2f} — 적정")
+        elif peg > 3.0:  score -= 2; notes.append(f"PEG {peg:.2f} — 성장 대비 고평가")
+
     return min(max(score, 0), 40), notes
 
 
@@ -287,6 +294,25 @@ def _mv(macro: dict, key: str) -> float | None:
             if f is not None:
                 return f
     return None
+
+
+def _analyst_consensus(info: dict, price: float | None) -> dict:
+    """yfinance info → 월가 컨센서스 요약 (확신도 외부 검증용)."""
+    n = int(info.get("numberOfAnalystOpinions") or 0)
+    rec = info.get("recommendationMean")
+    tgt = info.get("targetMeanPrice")
+    hi, lo = info.get("targetHighPrice"), info.get("targetLowPrice")
+    out: dict = {
+        "n": n,
+        "rec_mean": round(float(rec), 2) if rec else None,
+        "rec_key": info.get("recommendationKey"),
+        "target_mean": round(float(tgt), 2) if tgt else None,
+    }
+    if tgt and price:
+        out["target_gap_pct"] = round((float(tgt) / price - 1) * 100, 1)
+    if hi and lo and tgt:
+        out["dispersion"] = round((float(hi) - float(lo)) / float(tgt), 2)
+    return out
 
 
 def _score_macro(macro: dict) -> tuple[int, list[str]]:
@@ -565,6 +591,14 @@ def _stock_report_md(
     L.append(f"- {' | '.join(parts)}" if parts else "- 재무 지표 미수신")
     if quant.get("cashflow_pattern"):
         L.append(f"- 현금흐름 패턴: {quant['cashflow_pattern']}")
+    an = (conf or {}).get("analyst") or {}
+    if an.get("n", 0) >= 3:
+        gap = an.get("target_gap_pct")
+        gap_s = f" (현재가 대비 {gap:+.1f}%)" if gap is not None else ""
+        L.append(
+            f"- 월가 컨센서스: {an.get('rec_key', '—')} · 목표주가 평균 {an.get('target_mean', '—')}"
+            f"{gap_s} · 애널리스트 {an['n']}인"
+        )
     L.append("")
 
     # 계량 검증 (§4)
@@ -653,20 +687,24 @@ def analyze_stock_algo(
     # Layer 3 — 계량 검증 (§4)
     quant = _quant_metrics(ts, fs, ms, fund, macro)
 
-    # Layer 3b — 확신도 (데이터 커버리지 · 신호 일치 · 우위 · 경계선 · 뉴스)
+    # Layer 3b — 확신도 (커버리지 · 신호 일치 · 우위 · 경계선 · 뉴스 · 외부검증)
     _info = fund.get("info", {}) or {}
+    analyst = _analyst_consensus(_info, ta.get("price"))
     coverage = {
         "technical_ok": bool(ta.get("ok")),
         "has_ma200": ta.get("sma200") is not None,
         "has_pe": bool(_info.get("trailingPE") or _info.get("forwardPE")),
         "has_roe": _info.get("returnOnEquity") is not None,
         "has_cashflow": (fund.get("cashflow", {}) or {}).get("operating") is not None,
+        "n_analysts": analyst.get("n", 0),
     }
     conf = analysis_confidence(
         {"technical": ts, "fundamental": fs, "macro": ms, "news": ns},
         coverage, len(bulls), len(bears), len(news),
+        verdict=vd, analyst=analyst, vol_ratio=ta.get("vol_ratio"),
     )
     conf["hints"] = improvement_hints(conf, coverage, len(news), market)
+    conf["analyst"] = analyst
     cf = conf["grade"]
 
     # Layer 3c — 매매 타이밍·가격대

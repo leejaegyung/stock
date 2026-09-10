@@ -4,15 +4,19 @@ from app.core.confidence import analysis_confidence, improvement_hints
 
 _FULL_COV = {
     "technical_ok": True, "has_ma200": True,
-    "has_pe": True, "has_roe": True, "has_cashflow": True,
+    "has_pe": True, "has_roe": True, "has_cashflow": True, "n_analysts": 20,
 }
-_NO_COV = {k: False for k in _FULL_COV}
+_NO_COV = {k: (0 if k == "n_analysts" else False) for k in _FULL_COV}
+
+_ALIGN_BUY = {"n": 20, "rec_mean": 1.8, "target_gap_pct": 12.0, "dispersion": 0.2}
 
 
-def _c(tech, fund, macro, news, cov=_FULL_COV, bulls=3, bears=1, nc=5):
+def _c(tech, fund, macro, news, cov=_FULL_COV, bulls=3, bears=1, nc=5,
+       verdict="매수", analyst=_ALIGN_BUY, vol_ratio=None):
     return analysis_confidence(
         {"technical": tech, "fundamental": fund, "macro": macro, "news": news},
         cov, bulls, bears, nc,
+        verdict=verdict, analyst=analyst, vol_ratio=vol_ratio,
     )
 
 
@@ -54,8 +58,25 @@ def test_score_bounds_and_factor_sum():
     r = _c(30, 40, 20, 10, bulls=8, bears=0, nc=10)
     assert 0 <= r["score"] <= 100
     assert sum(f["score"] for f in r["factors"]) == r["score"] or r["score"] == 100
-    assert [f["max"] for f in r["factors"]] == [22, 28, 15, 25, 10]
+    assert [f["max"] for f in r["factors"]] == [20, 24, 13, 21, 8, 14]
     assert sum(f["max"] for f in r["factors"]) == 100
+
+
+def test_analyst_alignment_raises_confidence():
+    base = _c(24, 30, 14, 4, analyst={"n": 2})            # 커버리지 없음
+    aligned = _c(24, 30, 14, 4, verdict="매수", analyst=_ALIGN_BUY)
+    contra = _c(24, 30, 14, 4, verdict="매수",
+                analyst={"n": 18, "rec_mean": 4.1, "target_gap_pct": -14.0})
+    assert aligned["score"] > base["score"]
+    assert aligned["score"] > contra["score"]
+    assert any("상반" in x for x in contra["reasons"])
+
+
+def test_volume_confirmation_bonus():
+    quiet = _c(26, 30, 14, 5, bulls=5, bears=1, vol_ratio=1.0)
+    loud = _c(26, 30, 14, 5, bulls=5, bears=1, vol_ratio=1.6)
+    assert loud["score"] >= quiet["score"]
+    assert any("거래가 실림" in x for x in loud["reasons"])
 
 
 def test_grade_thresholds():

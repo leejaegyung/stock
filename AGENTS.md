@@ -39,9 +39,9 @@ Layer 0: config.py  (모든 레이어 공유)
 ```
 app/config.py                    — Settings (pydantic-settings, .env)
 app/core/formulas.py             — EV·켈리·CAPE·현금흐름 순수 함수 (Layer 1)
-app/core/confidence.py           — 분석 확신도 모델 순수 함수 (Layer 1): 데이터 커버리지·신호
-                                   일치도·신호 우위·점수 확신·뉴스 근거 5요소 → 0~100 점수 + 상/중/하
-                                   + 근거 + 개선 힌트. _verdict 의 점수구간 확신도를 대체
+app/core/confidence.py           — 분석 확신도 모델 순수 함수 (Layer 1): 커버리지·신호 일치도·
+                                   신호 우위(+거래량)·점수 확신·뉴스 근거·외부 검증(월가 컨센서스)
+                                   6요소 → 0~100 + 상/중/하 + 근거 + 힌트. _verdict 점수구간 확신도 대체
 app/core/translate.py            — 외신 뉴스 한국어 자동 번역 (유틸): 언어감지 + 기계번역(gtx/MyMemory)
                                    체인. LLM 미사용. 원문·원문링크 보존, 결과는 NewsItem 에 캐시
 app/core/market_scan.py          — 시장 국면·섹터 모멘텀 순수 함수 (Layer 1)

@@ -116,6 +116,10 @@ class USDataSource(DataSourceBase):
                 "debtToEquity", "dividendYield", "earningsGrowth",
                 "revenueGrowth", "profitMargins", "operatingMargins",
                 "marketCap", "currentPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
+                # 월가 컨센서스 (확신도 외부 검증) + PEG
+                "numberOfAnalystOpinions", "recommendationMean", "recommendationKey",
+                "targetMeanPrice", "targetHighPrice", "targetLowPrice",
+                "pegRatio", "trailingPegRatio", "earningsQuarterlyGrowth",
             ]
         }
         # yfinance ≥0.2.5x: dividendYield가 이미 퍼센트(예: 2.31)로 옴 → 소수(0.0231)로 정규화
