@@ -32,6 +32,7 @@ class AnalysisReport(Base):
     confidence = Column(String)
     report_md = Column(Text)
     metrics_json = Column(Text, default="")   # 구조화 지표(점수·EV·켈리·신호 등) JSON
+    source = Column(String, default="watchlist")  # watchlist | discovered (스캐너 자동발굴)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -145,6 +146,7 @@ def create_all_tables(db_path: str) -> None:
             "ALTER TABLE news_item ADD COLUMN headline_ko TEXT",
             "ALTER TABLE news_item ADD COLUMN summary_ko TEXT",
             "ALTER TABLE news_item ADD COLUMN lang TEXT",
+            "ALTER TABLE analysis_report ADD COLUMN source TEXT DEFAULT 'watchlist'",
         ]
         for sql in migrations:
             try:

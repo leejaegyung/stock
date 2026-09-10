@@ -50,7 +50,9 @@ app/core/trade_plan.py           — 매매 타이밍·가격대 순수 함수 (
 app/core/signal_perf.py          — 시그널 성과 집계 순수 함수 (Layer 1): 과거 결론 vs 이후 수익률 →
                                    결론별·확신도별 적중률·평균 수익률. /api/signals/performance
 app/core/universe.py             — 스캐너 종목 유니버스 (Layer 1, 순수 데이터): S&P 500 + KOSPI
-                                   대형주 목록. /api/scanner 가 모멘텀·상대강도로 랭킹 (KST 06:40 갱신)
+                                   대형주 목록. /api/scanner 가 모멘텀·상대강도로 랭킹 (KST 06:40 갱신).
+                                   스케줄러가 상위 유망 종목(관심목록 밖)을 자동 정식 분석 →
+                                   AnalysisReport.source='discovered' (UI에서 관심종목과 태두리 구분)
 app/core/quant.py                — 포트폴리오 계량 분석 순수 함수 (Layer 1): 변동성·샤프·소르티노·
                                    MDD·VaR·베타·상관·분산비율·비중 최적화(동일/역변동성/리스크패리티/
                                    최소분산)·리밸런싱 백테스트. gs-quant timeseries 스타일, 외부 API 없음

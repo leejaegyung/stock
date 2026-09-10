@@ -333,19 +333,97 @@ def _prewarm_caches() -> None:
         logger.warning("prewarm failed: %s", e)
 
 
+DISCOVER_MAX = 5   # 자동 발굴·분석할 관심목록 밖 종목 수
+
+
 def _scan_market_job() -> None:
-    """종목 스캐너 캐시를 하루 1회 갱신 (S&P500 + KOSPI 대형주 모멘텀 랭킹)."""
+    """종목 스캐너 캐시 갱신 + 상위 유망 종목 자동 분석 (관심목록 밖)."""
     try:
         from app.entrypoints.web import _scan_cache, _compute_scan
         import time
 
         data = _compute_scan()
-        if data.get("ok"):
-            _scan_cache["data"] = data
-            _scan_cache["ts"] = time.time()
-            logger.info("scanner cache refreshed: %d/%d scanned", data.get("scanned", 0), data.get("universe", 0))
+        if not data.get("ok"):
+            return
+        _scan_cache["data"] = data
+        _scan_cache["ts"] = time.time()
+        logger.info("scanner cache refreshed: %d/%d scanned", data.get("scanned", 0), data.get("universe", 0))
+        _discover_and_analyze(data.get("top", []))
     except Exception as e:
         logger.warning("scan_market job failed: %s", e)
+
+
+def _discover_and_analyze(top: list) -> None:
+    """스캐너 상위 종목 중 관심목록 밖 '유망' 등급을 골라 정식 분석 → source='discovered'."""
+    import hashlib
+    from datetime import datetime as _dt
+
+    from app.core.algo_pipeline import analyze_stock_algo, classify_news_algo
+
+    create_all_tables(settings.db_path)
+    factory = get_session_factory(settings.db_path)
+
+    with factory() as session:
+        held = {(w.ticker, w.market) for w in session.query(Watchlist).all()}
+
+    picks = [
+        x for x in top
+        if (x["ticker"], x["market"]) not in held and x.get("grade") == "유망" and x.get("score", 0) >= 66
+    ][:DISCOVER_MAX]
+    if not picks:
+        logger.info("discover: no qualifying candidates")
+        return
+
+    keep = {(p["ticker"], p["market"]) for p in picks}
+    date_str = date.today().isoformat()
+    logger.info("discover: analyzing %d candidates: %s", len(picks), [p["ticker"] for p in picks])
+
+    for p in picks:
+        ticker, market = p["ticker"], p["market"]
+        try:
+            result = analyze_stock_algo(ticker, market, date_str)
+            advice = result.get("advice", {})
+            import json as _json
+            from app.entrypoints.web import _report_metrics
+            metrics = _json.dumps(_report_metrics(result), ensure_ascii=False)
+            with factory() as session:
+                session.query(AnalysisReport).filter(
+                    AnalysisReport.ticker == ticker,
+                    AnalysisReport.market == market,
+                ).delete(synchronize_session=False)
+                session.add(AnalysisReport(
+                    ticker=ticker, market=market, date=date_str,
+                    verdict=advice.get("verdict"), confidence=advice.get("confidence"),
+                    report_md=advice.get("brief_section", ""),
+                    metrics_json=metrics, source="discovered",
+                ))
+                for item in result.get("raw_news", [])[:10]:
+                    url = item.get("url", "")
+                    headline = item.get("headline", "")
+                    uh = hashlib.md5((url or headline).encode()).hexdigest()
+                    if session.query(NewsItem).filter_by(url_hash=uh).first():
+                        continue
+                    try:
+                        pub = _dt.fromisoformat(item.get("published_at", ""))
+                    except (ValueError, TypeError):
+                        pub = _dt.utcnow()
+                    session.add(NewsItem(
+                        ticker=ticker, market=market, headline=headline,
+                        summary=item.get("summary", ""),
+                        impact=classify_news_algo(headline, item.get("summary", "")),
+                        source=item.get("source", ""), url=url,
+                        published_at=pub, url_hash=uh,
+                    ))
+                session.commit()
+        except Exception as e:
+            logger.warning("discover analyze %s failed: %s", ticker, e)
+
+    # 이번에 뽑히지 않은 옛 발굴 리포트 정리
+    with factory() as session:
+        for r in session.query(AnalysisReport).filter(AnalysisReport.source == "discovered").all():
+            if (r.ticker, r.market) not in keep:
+                session.delete(r)
+        session.commit()
 
 
 def _translate_news_job() -> None:

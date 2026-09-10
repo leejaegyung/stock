@@ -186,8 +186,8 @@ async def remove_from_watchlist(ticker: str, market: str = "US") -> dict:
 
 @app.get("/api/reports")
 async def list_reports(limit: int = 20, all: bool = False) -> list[dict[str, Any]]:
-    """분석 보고서 목록. 기본은 현재 관심종목(+브리핑)만 — 스캐너 미리보기 등으로
-    생긴 관심목록 밖 리포트는 숨긴다. all=true 로 전체 조회."""
+    """분석 보고서 목록 — 관심종목 + AI 발굴 종목(source='discovered') + 브리핑.
+    all=true 면 관심목록 밖 잔존 리포트까지 전부."""
     with _session() as session:
         wl = {(w.ticker, w.market) for w in session.query(Watchlist).all()}
         rows = (
@@ -198,7 +198,9 @@ async def list_reports(limit: int = 20, all: bool = False) -> list[dict[str, Any
         )
         out = []
         for r in rows:
-            if not all and r.ticker != "_BRIEF_" and (r.ticker, r.market) not in wl:
+            src = getattr(r, "source", None) or "watchlist"
+            in_wl = (r.ticker, r.market) in wl
+            if not all and r.ticker != "_BRIEF_" and not in_wl and src != "discovered":
                 continue
             out.append({
                 "id": r.id,
@@ -207,6 +209,8 @@ async def list_reports(limit: int = 20, all: bool = False) -> list[dict[str, Any
                 "date": r.date,
                 "verdict": r.verdict,
                 "confidence": r.confidence,
+                "source": "watchlist" if in_wl else src,
+                "in_watchlist": in_wl,
                 "metrics": _row_metrics(r),
                 "created_at": str(r.created_at),
             })
@@ -342,6 +346,7 @@ async def get_report(report_id: int) -> dict[str, Any]:
         row = session.query(AnalysisReport).filter_by(id=report_id).first()
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
+        in_wl = session.query(Watchlist).filter_by(ticker=row.ticker, market=row.market).first() is not None
         return {
             "id": row.id,
             "ticker": row.ticker,
@@ -350,6 +355,8 @@ async def get_report(report_id: int) -> dict[str, Any]:
             "verdict": row.verdict,
             "confidence": row.confidence,
             "report_md": row.report_md,
+            "source": "watchlist" if in_wl else (getattr(row, "source", None) or "watchlist"),
+            "in_watchlist": in_wl,
             "metrics": _row_metrics(row),
             "created_at": str(row.created_at),
         }
@@ -849,12 +856,37 @@ async def home_data() -> dict:
             for w in watchlist
         ]
 
+        # AI 발굴 종목 (스캐너 자동 분석, 관심목록 밖)
+        held = {(w.ticker, w.market) for w in watchlist}
+        disc_rows = (
+            session.query(AnalysisReport)
+            .filter(AnalysisReport.source == "discovered")
+            .order_by(AnalysisReport.created_at.desc())
+            .all()
+        )
+        discovered = []
+        seen: set = set()
+        for r in disc_rows:
+            key = (r.ticker, r.market)
+            if key in held or key in seen:
+                continue
+            seen.add(key)
+            discovered.append({
+                "ticker": r.ticker,
+                "market": r.market,
+                "report": {
+                    "id": r.id, "verdict": r.verdict, "confidence": r.confidence,
+                    "date": r.date, "metrics": _row_metrics(r),
+                },
+            })
+
     macro = _get_macro_cached()
 
     return {
         "today": today,
         "macro": macro,
         "watchlist": watchlist_data,
+        "discovered": discovered,
         "brief_today": brief_row.id if brief_row else None,
     }
 
