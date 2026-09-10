@@ -41,7 +41,7 @@ def _layer(path: Path) -> int:
     if parts[0] == "config.py":
         return 0
     if parts[0] == "core" and len(parts) > 1 and parts[1] in (
-        "formulas.py", "quant.py", "market_scan.py", "confidence.py", "trade_plan.py",
+        "formulas.py", "quant.py", "market_scan.py", "confidence.py", "trade_plan.py", "signal_perf.py",
     ):
         return 1
     if parts[0] == "db":
@@ -95,7 +95,7 @@ def _module_to_layer(module: str) -> int:
         return 0
     if module in (
         "app.core.formulas", "app.core.quant", "app.core.market_scan", "app.core.confidence",
-        "app.core.trade_plan",
+        "app.core.trade_plan", "app.core.signal_perf",
     ):
         return 1
     if module.startswith("app.db"):

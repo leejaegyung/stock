@@ -242,6 +242,93 @@ async def report_history(ticker: str, market: str = "US", limit: int = 24) -> di
     return {"ticker": t, "market": m, "count": len(pts), "points": pts, "changes": changes}
 
 
+_sigperf_cache: dict = {}
+_SIGPERF_TTL = 3600
+
+
+@app.get("/api/signals/performance")
+async def signal_performance(horizon_days: int = 20, band: float = 2.0) -> dict:
+    """과거 분석 결론 vs 이후 실제 수익률 → 적중률·평균 수익률 (결론별·확신도별)."""
+    import time
+
+    import pandas as pd
+
+    from app.core.signal_perf import summarize
+
+    hd = max(3, min(120, horizon_days))
+    ck = f"{hd}:{band}"
+    now = time.time()
+    hit = _sigperf_cache.get(ck)
+    if hit and now - hit[0] < _SIGPERF_TTL:
+        return hit[1]
+
+    with _session() as session:
+        rows = (
+            session.query(AnalysisReport)
+            .filter(AnalysisReport.ticker != "_BRIEF_")
+            .order_by(AnalysisReport.created_at.asc())
+            .all()
+        )
+        reports = [
+            {
+                "id": r.id, "ticker": r.ticker, "market": r.market,
+                "date": r.date, "verdict": r.verdict, "confidence": r.confidence,
+            }
+            for r in rows
+        ]
+
+    # 종목별 종가 시계열 (1회씩)
+    px_cache: dict[str, pd.Series] = {}
+    for r in reports:
+        key = f"{r['ticker']}:{r['market']}"
+        if key in px_cache:
+            continue
+        try:
+            df = _price_df(r["ticker"], r["market"], period="2y")
+            px_cache[key] = df["Close"].dropna() if (df is not None and "Close" in getattr(df, "columns", [])) else None
+        except Exception:
+            px_cache[key] = None
+
+    signals = []
+    resolved = []
+    today = pd.Timestamp.today().normalize()
+    for r in reports:
+        s = px_cache.get(f"{r['ticker']}:{r['market']}")
+        if s is None or s.empty:
+            continue
+        try:
+            d0 = pd.Timestamp(r["date"]).normalize()
+        except Exception:
+            continue
+        idx = s.index
+        i0 = idx.searchsorted(d0)
+        if i0 >= len(s) - 1:
+            continue
+        p0 = float(s.iloc[i0])
+        i1 = min(i0 + hd, len(s) - 1)
+        elapsed = (today - idx[i0]).days
+        if elapsed < max(3, hd // 3):        # 아직 평가하기 이른 시그널
+            continue
+        p1 = float(s.iloc[i1])
+        if p0 <= 0:
+            continue
+        ret = (p1 / p0 - 1) * 100
+        signals.append({"verdict": r["verdict"], "confidence": r["confidence"], "fwd_return_pct": ret})
+        resolved.append({
+            "ticker": r["ticker"], "date": r["date"], "verdict": r["verdict"],
+            "confidence": r["confidence"], "fwd_return_pct": round(ret, 2),
+            "mature": i1 - i0 >= hd,
+        })
+
+    out = summarize(signals, band=band)
+    out["horizon_days"] = hd
+    out["samples"] = len(signals)
+    out["resolved"] = resolved[-40:][::-1]
+    out["as_of"] = date.today().isoformat()
+    _sigperf_cache[ck] = (now, out)
+    return out
+
+
 @app.get("/api/reports/{report_id}")
 async def get_report(report_id: int) -> dict[str, Any]:
     with _session() as session:

@@ -639,6 +639,7 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
 <!-- ── 분석 보고서 ── -->
 <div class="panel" id="panel-reports">
   <div class="stat-strip" id="reports-summary"></div>
+  <div id="signal-perf" style="margin:10px 0"></div>
   <div class="pill-row" id="report-filters">
     <div class="pills">
       <button class="pill on" onclick="setReportFilter('전체',this)">전체</button>
@@ -1715,7 +1716,47 @@ async function loadReports(){
     document.getElementById('badge-reports').textContent = _reportsAll.length;
     renderReportsSummary();
     renderReportsCards();
+    loadSignalPerf();
   } catch(e){ cards.innerHTML = `<div class="empty" style="color:var(--up)">오류: ${esc(e.message)}</div>`; }
+}
+async function loadSignalPerf(){
+  const el = document.getElementById('signal-perf');
+  if (!el) return;
+  try {
+    const d = await api('/api/signals/performance?horizon_days=20');
+    if (!d.samples){
+      el.innerHTML = `<div class="stat-cell" style="border:1px solid var(--line);border-radius:12px;padding:10px 14px">
+        <div class="stat-cell-label">시그널 성과 추적</div>
+        <div style="font-size:11px;color:var(--mute);margin-top:3px">아직 20일 이상 경과한 분석이 부족합니다. 리포트가 쌓이면 결론별 적중률이 표시됩니다.</div></div>`;
+      return;
+    }
+    const o = d.overall, dir = d.directional;
+    const rate = v => v == null ? '—' : Math.round(v * 100) + '%';
+    const sign = v => v == null ? '' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+    const vcell = (label, a) => a && a.count ? `
+      <div style="flex:1;min-width:96px;background:var(--card-2);border-radius:10px;padding:8px 10px">
+        <div style="font-size:10.5px;color:var(--mute)">${label}</div>
+        <div style="font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;color:${a.hit_rate >= 0.55 ? 'var(--up)' : a.hit_rate >= 0.45 ? 'var(--ink)' : 'var(--accent-strong)'}">${rate(a.hit_rate)}<span style="font-size:10px;color:var(--mute);font-weight:400"> ${a.count}건</span></div>
+        <div style="font-size:10.5px;color:var(--sub);font-variant-numeric:tabular-nums">평균 ${sign(a.avg_return)}</div>
+      </div>` : '';
+    el.innerHTML = `<div style="border:1px solid var(--line);border-radius:12px;padding:12px 14px">
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">
+        <span style="font-size:13px;font-weight:700">시그널 적중률 <span style="font-size:11px;color:var(--mute);font-weight:400">· 결론 후 ${d.horizon_days}거래일 · ±${d.band}% 기준</span></span>
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:var(--sub)">전체 ${rate(o.hit_rate)} (${o.count}건) · 평균 ${sign(o.avg_return)}</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${vcell('매수', d.by_verdict['매수'])}
+        ${vcell('추가매수', d.by_verdict['추가매수'])}
+        ${vcell('매도', d.by_verdict['매도'])}
+        ${vcell('보유(횡보 예측)', d.by_verdict['보유'])}
+        ${vcell('확신도 상', d.by_confidence['상'])}
+        ${vcell('확신도 중', d.by_confidence['중'])}
+        ${vcell('확신도 하', d.by_confidence['하'])}
+      </div>
+      <div style="font-size:10px;color:var(--mute);margin-top:7px">과거 성과이며 미래를 보장하지 않습니다. 투자 자문 아님.</div>
+    </div>`;
+  } catch { el.innerHTML = ''; }
 }
 function setReportFilter(f, btn){
   _reportFilter = f;
@@ -3517,6 +3558,7 @@ async function mbStockList(){
         <a onclick="mbToggleWlEdit()">${MB.wlEdit ? '완료' : '편집'}</a>
         <a onclick="mbOpenAddSheet()" style="margin-left:12px">＋ 추가</a>
       </div>
+      <div class="m-pad"><div class="m-card" id="m-sigperf" style="padding:0"></div></div>
       <div class="m-hscroll">
         ${filters.map(x => `<button class="m-filter${x === f ? ' on' : ''}" onclick="mbSetReportFilter('${x}')">${x}${x !== '전체' && cnt(x) ? ` ${cnt(x)}` : ''}</button>`).join('')}
       </div>
@@ -3525,9 +3567,35 @@ async function mbStockList(){
       </div></div>
       ${rest.length && f === '전체' ? `<div class="m-sec"><b style="font-size:15px;color:var(--sub)">미분석</b></div><div class="m-pad"><div class="m-card" style="overflow:hidden">${rest.map(row).join('')}</div></div>` : ''}
       <div style="height:8px"></div>`;
+    mbLoadSigPerf();
   } catch (e) {
     el.innerHTML = `<div class="m-pad"><div class="m-card" style="padding:20px;color:var(--up);font-size:13px">오류: ${esc(e.message)}</div></div>`;
   }
+}
+async function mbLoadSigPerf(){
+  const box = document.getElementById('m-sigperf');
+  if (!box) return;
+  try {
+    const d = await api('/api/signals/performance?horizon_days=20');
+    if (!d.samples){ box.parentElement.parentElement.style.display = 'none'; return; }
+    const o = d.overall, dir = d.directional;
+    const rate = v => v == null ? '—' : Math.round(v * 100) + '%';
+    const sign = v => v == null ? '' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+    const cell = (label, a) => a && a.count ? `<div style="flex:1;min-width:0;text-align:center;padding:8px 4px">
+      <div style="font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;color:${a.hit_rate >= 0.55 ? 'var(--up)' : a.hit_rate >= 0.45 ? 'var(--ink)' : 'var(--accent-strong)'}">${rate(a.hit_rate)}</div>
+      <div style="font-size:10.5px;color:var(--mute)">${label} ${a.count}건</div></div>` : '';
+    box.style.padding = '12px 14px';
+    box.innerHTML = `
+      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">
+        <span style="font-size:13px;font-weight:700">시그널 적중률</span>
+        <span style="font-size:10.5px;color:var(--mute)">결론 후 ${d.horizon_days}거래일 기준</span>
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:var(--sub);font-variant-numeric:tabular-nums">전체 ${rate(o.hit_rate)} · 평균 ${sign(o.avg_return)}</span>
+      </div>
+      <div style="display:flex;border-top:1px solid var(--line)">
+        ${cell('방향성', dir)}${cell('보유', d.by_verdict['보유'])}${cell('확신도 상', d.by_confidence['상'])}${cell('확신도 중', d.by_confidence['중'])}
+      </div>`;
+  } catch { const b = document.getElementById('m-sigperf'); if (b) b.parentElement.parentElement.style.display = 'none'; }
 }
 
 const MB_RANGES = ['1일','1주','1개월','3개월','1년','전체'];
