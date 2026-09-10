@@ -2244,8 +2244,46 @@ async function showReport(id){
         <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--sub)">확신도 ${esc(r.confidence || '—')}${cs != null ? ` (${cs}/100)` : ''} ${confBar(r.confidence)}</span>
       </div>
       <div style="font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums">${esc(r.date)}</div>`;
-    document.getElementById('modal-body').innerHTML = marked.parse(humanizeReport(_modalRaw)) || '<p style="color:var(--mute)">내용 없음</p>';
+    document.getElementById('modal-body').innerHTML =
+      '<div id="report-history"></div>' + (marked.parse(humanizeReport(_modalRaw)) || '<p style="color:var(--mute)">내용 없음</p>');
+    loadReportHistory(r.ticker, r.market);
   } catch(e){ document.getElementById('modal-body').innerHTML = `<p style="color:var(--up)">${esc(e.message)}</p>`; }
+}
+async function loadReportHistory(ticker, market){
+  const el = document.getElementById('report-history');
+  if (!el) return;
+  try {
+    const d = await api(`/api/reports/history/${encodeURIComponent(ticker)}?market=${market}`);
+    if (!d.points || d.points.length < 2){ el.innerHTML = ''; return; }
+    const pts = d.points;
+    const W = 320, H = 60, PAD = 6;
+    const sc = pts.map(p => p.score_total).filter(v => v != null);
+    if (sc.length < 2){ el.innerHTML = ''; return; }
+    const lo = Math.min(...sc, 30), hi = Math.max(...sc, 70), rng = (hi - lo) || 1;
+    const x = i => (i / (pts.length - 1) * W).toFixed(1);
+    const y = v => (PAD + (hi - v) / rng * (H - PAD * 2)).toFixed(1);
+    const line = pts.map((p, i) => p.score_total != null ? `${x(i)},${y(p.score_total)}` : null).filter(Boolean).join(' ');
+    const dots = pts.map((p, i) => p.score_total != null
+      ? `<circle cx="${x(i)}" cy="${y(p.score_total)}" r="2.5" fill="${VERDICT_COLOR[p.verdict] || 'var(--mute)'}"/>` : '').join('');
+    const chg = (d.changes || []).map(c =>
+      `<span style="font-size:10.5px;color:var(--sub)">${esc(c.at.slice(2, 10))} <b style="color:var(--mute)">${esc(c.from)}</b> → <b style="color:${VERDICT_COLOR[c.to] || 'var(--ink)'}">${esc(c.to)}</b></span>`
+    ).join('<br>');
+    const first = pts[0], last = pts[pts.length - 1];
+    el.innerHTML = `
+      <details style="border:1px solid var(--line);border-radius:10px;margin-bottom:14px" open>
+        <summary style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--sub);cursor:pointer;list-style:none">분석 이력 ${pts.length}회 · 종합점수 추이 ▾</summary>
+        <div style="padding:4px 12px 12px">
+          <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block">
+            <polyline points="${line}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${dots}
+          </svg>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mute);font-variant-numeric:tabular-nums">
+            <span>${esc(first.at.slice(2, 10))} · ${first.score_total}점 (${esc(first.verdict)})</span>
+            <span>${esc(last.at.slice(2, 10))} · ${last.score_total}점 (${esc(last.verdict)})</span>
+          </div>
+          ${chg ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);line-height:1.7">${chg}</div>` : ''}
+        </div>
+      </details>`;
+  } catch { el.innerHTML = ''; }
 }
 function modalBgClick(e){ if (e.target === document.getElementById('modal-bg')) closeModal(); }
 let _modalOpen = false, _navSuppress = false, _mbSheetOpen = false;
@@ -2688,7 +2726,49 @@ function renderAnalytics(d){
     <div class="g-row" style="color:var(--mute)">모든 수치는 최근 ${d.observations}거래일의 과거 데이터로 계산했으며, 투자 자문이 아닙니다.</div>
   </details>`;
 
-  document.getElementById('pa-body').innerHTML = statHtml + paTbl + schemeTbl + heat + guide;
+  // 실행 리밸런싱
+  const rec = order.find(k => k !== 'current' && d.schemes[k] && d.schemes[k].sharpe === bestSharpe) || 'risk_parity';
+  const rebal = `<div class="pa-h">🎯 이 비중에 맞추려면 (매수·매도)</div>
+  <div class="pa-hint">선택한 방식으로 재조정할 때 필요한 매매입니다. 정수 주 기준 · 세금·수수료 미포함 · 투자 자문 아님.</div>
+  <div style="display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap">
+    <select id="rb-scheme" style="width:auto;height:30px;font-size:12px">
+      ${['equal','inverse_vol','risk_parity','min_variance'].map(k =>
+        `<option value="${k}"${k === rec ? ' selected' : ''}>${SCHEME_DESC[k] ? d.schemes[k].name : k}</option>`).join('')}
+    </select>
+    <input id="rb-cash" inputmode="numeric" placeholder="추가 투입금(원, 선택)" style="width:150px;height:30px;font-size:12px" oninput="fmtInput(this)">
+    <button class="btn btn-primary btn-xs" onclick="loadRebalance()">주문 계산</button>
+  </div>
+  <div id="rb-body"></div>`;
+
+  document.getElementById('pa-body').innerHTML = statHtml + paTbl + schemeTbl + rebal + heat + guide;
+}
+async function loadRebalance(){
+  const el = document.getElementById('rb-body');
+  const scheme = document.getElementById('rb-scheme').value;
+  const cash = parseWon(document.getElementById('rb-cash').value);
+  el.innerHTML = `<div style="font-size:12px;color:var(--mute)"><span class="spin"></span> 계산 중…</div>`;
+  try {
+    const d = await api('/api/portfolio/rebalance', { method:'POST', body: JSON.stringify({ scheme, cash_add_krw: cash, period:'1y' }) });
+    if (!d.ok){ el.innerHTML = `<div style="font-size:12px;color:var(--mute)">${esc(d.reason)}</div>`; return; }
+    const rows = d.orders.map(o => {
+      const col = o.action === '매수' ? 'var(--up)' : o.action === '매도' ? 'var(--accent-strong)' : 'var(--mute)';
+      const ds = Math.abs(o.delta_shares);
+      return `<tr>
+        <td style="font-weight:600">${esc(o.ticker)}<div style="font-size:10px;color:var(--mute);font-weight:400">${pct1(o.current_weight)} → ${pct1(o.target_weight)}</div></td>
+        <td class="num">${o.current_shares}주</td>
+        <td class="num" style="color:${col};font-weight:600">${o.action === '유지' ? '—' : `${o.action} ${ds % 1 ? ds.toFixed(2) : ds}주`}</td>
+        <td class="num" style="color:${col}">${o.delta_krw === 0 ? '—' : (o.delta_krw > 0 ? '+' : '') + krw(o.delta_krw)}</td>
+      </tr>`;
+    }).join('');
+    el.innerHTML = `
+      <div class="tbl-scroll"><table class="scheme-tbl" style="min-width:440px">
+        <thead><tr><th>종목</th><th>현재</th><th>주문</th><th>금액</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div style="font-size:11px;color:var(--sub);margin-top:6px;font-variant-numeric:tabular-nums">
+        매수 합계 ${krw(d.buy_krw)} · 매도 합계 ${krw(d.sell_krw)}${d.cash_add_krw ? ` · 추가 투입 ${krw(d.cash_add_krw)}` : ''} · 재조정 후 투자원금 ${krw(d.invest_krw)}
+      </div>`;
+  } catch(e){ el.innerHTML = `<div style="font-size:12px;color:var(--up)">실패: ${esc(e.message)}</div>`; }
 }
 
 async function runBacktest(){
@@ -3666,13 +3746,45 @@ async function mbAssets(){
       </div></div>` : ''}
       <div class="m-sec"><b>주식 포지션</b><a style="color:${mbCol(stockPct)};cursor:default">${mbPct(stockPct)}</a></div>
       <div class="m-pad"><div class="m-card" style="overflow:hidden">${posRows || '<div style="padding:24px;text-align:center;color:var(--mute);font-size:13px">보유 종목이 없습니다</div>'}</div></div>
+      ${held.length >= 2 ? `<div class="m-sec"><b>리밸런싱 제안</b>
+        <select id="m-rb-scheme" onchange="mbLoadRebalance()" style="width:auto;height:28px;font-size:12px">
+          <option value="risk_parity">리스크 패리티</option><option value="equal">동일 비중</option>
+          <option value="inverse_vol">역변동성</option><option value="min_variance">최소 분산</option>
+        </select></div>
+      <div class="m-pad"><div class="m-card" id="m-rb" style="overflow:hidden"><div class="m-skel" style="height:56px;margin:12px"></div></div></div>` : ''}
       <div class="m-sec"><b>이번 달 가계부</b></div>
       <div class="m-pad"><div class="m-card" id="m-tx" style="overflow:hidden"><div class="m-skel" style="height:56px;margin:12px"></div></div></div>`;
 
     mbLoadTx();
+    if (held.length >= 2) mbLoadRebalance();
   } catch (e) {
     el.innerHTML = `<div class="m-pad"><div class="m-card" style="padding:20px;color:var(--up);font-size:13px">오류: ${esc(e.message)}</div></div>`;
   }
+}
+async function mbLoadRebalance(){
+  const box = document.getElementById('m-rb');
+  if (!box) return;
+  const sel = document.getElementById('m-rb-scheme');
+  const scheme = sel ? sel.value : 'risk_parity';
+  box.innerHTML = `<div style="padding:14px 16px;font-size:12.5px;color:var(--mute)"><span class="spin"></span> 계산 중…</div>`;
+  try {
+    const d = await api('/api/portfolio/rebalance', { method: 'POST', body: JSON.stringify({ scheme, cash_add_krw: 0, period: '1y' }) });
+    if (!d.ok){ box.innerHTML = `<div style="padding:16px;font-size:12.5px;color:var(--mute)">${esc(d.reason)}</div>`; return; }
+    box.innerHTML = d.orders.map((o, i, a) => {
+      const col = o.action === '매수' ? 'var(--up)' : o.action === '매도' ? 'var(--accent-strong)' : 'var(--mute)';
+      const ds = Math.abs(o.delta_shares);
+      return `<div style="display:flex;align-items:center;gap:10px;padding:12px 16px${i < a.length - 1 ? ';border-bottom:1px solid var(--line)' : ''}">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:600">${esc(o.ticker)}</div>
+          <div style="font-size:11.5px;color:var(--mute);font-variant-numeric:tabular-nums">${pct1(o.current_weight)} → ${pct1(o.target_weight)}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:13.5px;font-weight:700;color:${col};font-variant-numeric:tabular-nums">${o.action === '유지' ? '유지' : `${o.action} ${ds % 1 ? ds.toFixed(2) : ds}주`}</div>
+          <div style="font-size:11.5px;color:var(--mute);font-variant-numeric:tabular-nums">${o.delta_krw === 0 ? '' : (o.delta_krw > 0 ? '+' : '') + krw(o.delta_krw)}</div>
+        </div>
+      </div>`;
+    }).join('') + `<div style="padding:10px 16px;font-size:11.5px;color:var(--sub);background:var(--card-2);font-variant-numeric:tabular-nums">매수 ${krw(d.buy_krw)} · 매도 ${krw(d.sell_krw)} · 세금·수수료 미포함</div>`;
+  } catch (e) { box.innerHTML = `<div style="padding:16px;font-size:12.5px;color:var(--up)">실패: ${esc(e.message)}</div>`; }
 }
 async function mbLoadTx(){
   const box = document.getElementById('m-tx');

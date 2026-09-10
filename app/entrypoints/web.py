@@ -208,6 +208,40 @@ async def list_reports(limit: int = 20) -> list[dict[str, Any]]:
         ]
 
 
+@app.get("/api/reports/history/{ticker}")
+async def report_history(ticker: str, market: str = "US", limit: int = 24) -> dict:
+    """종목별 분석 이력 — 결론·종합점수·확신도·기대값 시계열."""
+    t, m = ticker.upper(), market.upper()
+    with _session() as session:
+        rows = (
+            session.query(AnalysisReport)
+            .filter(AnalysisReport.ticker == t, AnalysisReport.market == m)
+            .order_by(AnalysisReport.created_at.asc())
+            .all()
+        )
+    pts = []
+    for r in rows[-limit:]:
+        mt = _row_metrics(r)
+        pts.append({
+            "id": r.id,
+            "date": r.date,
+            "at": str(r.created_at)[:16],
+            "verdict": r.verdict,
+            "confidence": r.confidence,
+            "score_total": mt.get("score_total"),
+            "confidence_score": mt.get("confidence_score"),
+            "ev": mt.get("ev"),
+            "price": mt.get("price"),
+            "target": mt.get("target"),
+        })
+    # 결론이 바뀐 지점 표시
+    changes = []
+    for i in range(1, len(pts)):
+        if pts[i]["verdict"] != pts[i - 1]["verdict"]:
+            changes.append({"at": pts[i]["at"], "from": pts[i - 1]["verdict"], "to": pts[i]["verdict"]})
+    return {"ticker": t, "market": m, "count": len(pts), "points": pts, "changes": changes}
+
+
 @app.get("/api/reports/{report_id}")
 async def get_report(report_id: int) -> dict[str, Any]:
     with _session() as session:
@@ -1873,6 +1907,94 @@ async def run_backtest(body: BacktestReq) -> dict:
             "equity": bench_eq,
             "metrics": quant.portfolio_metrics(bench[_bt_start:], rf),
         },
+    }
+
+
+class RebalanceReq(BaseModel):
+    scheme: str = "risk_parity"      # equal | inverse_vol | risk_parity | min_variance
+    cash_add_krw: float = 0.0        # 추가 투입 현금(원)
+    period: str = "1y"
+
+
+@app.post("/api/portfolio/rebalance")
+async def rebalance_orders(body: RebalanceReq) -> dict:
+    """목표 비중 도달을 위한 종목별 매수/매도 주식 수 (정수 주, 원화 기준)."""
+    from app.core import quant
+
+    with _session() as session:
+        rows = session.query(Watchlist).filter(Watchlist.quantity > 0).all()
+        holds = [(r.ticker, r.market, float(r.quantity or 0)) for r in rows]
+
+    if len(holds) < 2:
+        return {"ok": False, "reason": "보유 종목이 2개 이상이어야 리밸런싱할 수 있습니다."}
+
+    tickers = [(t, m) for (t, m, _) in holds]
+    labels, matrix, _bench = _aligned_returns(tickers, body.period)
+    if not labels or len(labels) < 2:
+        return {"ok": False, "reason": "가격 시계열을 확보하지 못했습니다."}
+
+    scheme = body.scheme if body.scheme in ("equal", "inverse_vol", "risk_parity", "min_variance") else "risk_parity"
+    if scheme == "equal":
+        tw = quant.equal_weights(len(labels))
+    elif scheme == "inverse_vol":
+        tw = quant.inverse_vol_weights(matrix)
+    elif scheme == "min_variance":
+        tw = quant.min_variance_weights(matrix)
+    else:
+        tw = quant.risk_parity_weights(matrix)
+
+    pf = await get_portfolio()
+    by_t = {p["ticker"]: p for p in pf}
+    qty_by_t = {t: q for (t, _m, q) in holds}
+
+    cur_val = {t: (by_t.get(t, {}).get("current_value") or 0) for t in labels}
+    total_now = sum(cur_val.values())
+    invest = total_now + max(0.0, body.cash_add_krw)
+    if total_now <= 0:
+        return {"ok": False, "reason": "평가금액을 계산할 수 없습니다."}
+
+    orders = []
+    buy_krw = sell_krw = 0.0
+    for i, t in enumerate(labels):
+        p = by_t.get(t, {})
+        px = p.get("current_price_krw")
+        if not px:
+            continue
+        cur_sh = qty_by_t.get(t, 0)
+        tgt_val = invest * tw[i]
+        tgt_sh = round(tgt_val / px)
+        delta = tgt_sh - cur_sh
+        delta_krw = round(delta * px)
+        if delta_krw > 0:
+            buy_krw += delta_krw
+        else:
+            sell_krw += -delta_krw
+        orders.append({
+            "ticker": t,
+            "name": p.get("name") or t,
+            "market": p.get("market"),
+            "price_krw": round(px),
+            "current_shares": round(cur_sh, 4) if cur_sh % 1 else int(cur_sh),
+            "current_weight": round(cur_val[t] / total_now, 4) if total_now else 0,
+            "target_weight": round(tw[i], 4),
+            "target_shares": tgt_sh,
+            "delta_shares": round(delta, 4) if delta % 1 else int(delta),
+            "delta_krw": delta_krw,
+            "action": "매수" if delta > 0 else ("매도" if delta < 0 else "유지"),
+        })
+
+    orders.sort(key=lambda o: o["delta_krw"])
+    return {
+        "ok": True,
+        "scheme": scheme,
+        "scheme_name": {"equal": "동일 비중", "inverse_vol": "역변동성",
+                        "risk_parity": "리스크 패리티", "min_variance": "최소 분산"}[scheme],
+        "total_now_krw": round(total_now),
+        "cash_add_krw": round(max(0.0, body.cash_add_krw)),
+        "invest_krw": round(invest),
+        "buy_krw": round(buy_krw),
+        "sell_krw": round(sell_krw),
+        "orders": orders,
     }
 
 
