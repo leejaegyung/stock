@@ -185,16 +185,22 @@ async def remove_from_watchlist(ticker: str, market: str = "US") -> dict:
 # ── Reports API ───────────────────────────────────────────────────────────────
 
 @app.get("/api/reports")
-async def list_reports(limit: int = 20) -> list[dict[str, Any]]:
+async def list_reports(limit: int = 20, all: bool = False) -> list[dict[str, Any]]:
+    """분석 보고서 목록. 기본은 현재 관심종목(+브리핑)만 — 스캐너 미리보기 등으로
+    생긴 관심목록 밖 리포트는 숨긴다. all=true 로 전체 조회."""
     with _session() as session:
+        wl = {(w.ticker, w.market) for w in session.query(Watchlist).all()}
         rows = (
             session.query(AnalysisReport)
             .order_by(AnalysisReport.created_at.desc())
-            .limit(limit)
+            .limit(max(limit, 300) if not all else limit)
             .all()
         )
-        return [
-            {
+        out = []
+        for r in rows:
+            if not all and r.ticker != "_BRIEF_" and (r.ticker, r.market) not in wl:
+                continue
+            out.append({
                 "id": r.id,
                 "ticker": r.ticker,
                 "market": r.market,
@@ -203,9 +209,10 @@ async def list_reports(limit: int = 20) -> list[dict[str, Any]]:
                 "confidence": r.confidence,
                 "metrics": _row_metrics(r),
                 "created_at": str(r.created_at),
-            }
-            for r in rows
-        ]
+            })
+            if len(out) >= limit:
+                break
+        return out
 
 
 @app.get("/api/reports/history/{ticker}")
