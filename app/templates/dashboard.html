@@ -709,6 +709,14 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
       <div class="box-head"><span class="box-title">유망 분야 · 대표 종목</span><span class="box-sub">종합 점수 상위</span></div>
       <div id="ol-picks" class="box-body-flush"></div>
     </div>
+    <div class="box">
+      <div class="box-head">
+        <span class="box-title">📡 종목 스캐너</span>
+        <span class="box-sub" id="scan-meta">S&amp;P 500 + KOSPI 대형주 · 관심종목 제외</span>
+        <button class="btn btn-link" onclick="loadScanner(true)">새로고침</button>
+      </div>
+      <div id="scan-body" class="box-body-flush"><div style="padding:10px 12px;font-size:12px;color:var(--mute)"><span class="spin"></span> 불러오는 중…</div></div>
+    </div>
     <div class="pa-hint" style="padding:0 2px">모든 판정은 최근 1년 가격 데이터의 모멘텀·추세·상대강도를 알고리즘으로 계산한 것이며, 투자 자문이 아닙니다.</div>
   </div>
 </div>
@@ -1962,6 +1970,50 @@ async function loadOutlook(force){
     if (!d.ok){ secEl.innerHTML = `<div class="empty" style="color:var(--mute)">${esc(d.reason || '분석할 수 없습니다.')}</div>`; return; }
     renderOutlook(d);
   } catch(e){ secEl.innerHTML = `<div class="empty" style="color:var(--up)">실패: ${esc(e.message)}</div>`; }
+  loadScanner(force);
+}
+let _scanPoll = null;
+async function loadScanner(force){
+  const el = document.getElementById('scan-body');
+  try {
+    const d = await api('/api/scanner' + (force ? '?refresh=true' : ''));
+    if (!d.ok){
+      el.innerHTML = `<div style="padding:10px 12px;font-size:12px;color:var(--mute)"><span class="spin"></span> ${esc(d.reason || '스캔 준비 중…')}</div>`;
+      clearTimeout(_scanPoll); _scanPoll = setTimeout(() => loadScanner(false), 20000);
+      return;
+    }
+    clearTimeout(_scanPoll);
+    document.getElementById('scan-meta').textContent =
+      `${d.scanned}/${d.universe}종목 스캔 · ${esc(d.as_of)}${d.updating ? ' · 갱신 중' : ''}`;
+    const tone = { good:'var(--up)', mid:'var(--warn)', warn:'var(--sub)', bad:'var(--accent-strong)' };
+    el.innerHTML = d.top.map(x => `
+      <div class="wl-row" style="cursor:default">
+        <div class="wl-row-top">
+          <span class="wl-tk">${esc(x.ticker)}</span>${mktChip(x.market)}
+          <span class="grade grade-${x.tone}" style="font-size:9.5px">${esc(x.grade)} ${x.score.toFixed(0)}</span>
+          <span style="font-size:11px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.name)}</span>
+          <span style="flex:1"></span>
+          <button class="btn btn-flat btn-xs" onclick="scanAdd('${esc(x.ticker)}','${x.market}',this)">+ 분석</button>
+        </div>
+        <div class="wl-row-bot" style="font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums">
+          3M <span style="color:${tone[x.tone]}">${fmtPct(x.ret_3m)}</span> · 6M ${fmtPct(x.ret_6m)} · 시장 대비 ${x.rel_strength >= 0 ? '+' : ''}${x.rel_strength} · RSI ${x.rsi}${x.above_ma200 ? ' · 200일선 위' : ''}
+        </div>
+      </div>`).join('') || '<div style="padding:12px;color:var(--mute);font-size:12px">유망 종목이 없습니다.</div>';
+  } catch(e){ el.innerHTML = `<div style="padding:10px 12px;font-size:12px;color:var(--up)">실패: ${esc(e.message)}</div>`; }
+}
+async function scanAdd(ticker, market, btn){
+  btn.disabled = true; btn.textContent = '추가 중…';
+  try {
+    let name = ticker;
+    try { const s = await api(`/api/stock-info/${encodeURIComponent(ticker)}?market=${market}`); name = s.name || ticker; } catch {}
+    await api('/api/watchlist', { method:'POST', body: JSON.stringify({ ticker, market, name }) }).catch(e => {
+      if (e.message !== 'Already exists') throw e;
+    });
+    await api(`/api/analyze/${ticker}?market=${market}`, { method:'POST' });
+    toast(`${ticker} 관심종목 추가 + 분석 시작 (3~5분)`);
+    btn.textContent = '분석 중 ✓';
+    _pfMap = {}; _paLoaded = false;
+  } catch(e){ toast(e.message, 'err'); btn.disabled = false; btn.textContent = '+ 분석'; }
 }
 const GRADE_TONE = { 유망:'good', 관심:'mid', 중립:'warn', 주의:'bad' };
 function renderOutlook(d){
@@ -2192,7 +2244,7 @@ async function loadSchedulerStatus(){
   try {
     const d = await api('/api/scheduler/status');
     if (!d.running){ el.innerHTML = '<span style="color:var(--accent-strong)">스케줄러 미실행</span>'; return; }
-    const labels = { morning_brief:'모닝 브리핑 (KST 10:30)', news_watcher_noon:'뉴스 감시 (KST 12:00)', news_watcher_evening:'뉴스 감시 (KST 18:00)', news_cleanup:'뉴스 정리 (KST 03:00)', prewarm_caches:'시세 캐시 예열 (12분)' };
+    const labels = { morning_brief:'모닝 브리핑 (KST 10:30)', news_watcher_noon:'뉴스 감시 (KST 12:00)', news_watcher_evening:'뉴스 감시 (KST 18:00)', news_cleanup:'뉴스 정리 (KST 03:00)', scan_market:'종목 스캐너 (KST 06:40)', prewarm_caches:'시세 캐시 예열 (12분)' };
     el.innerHTML = d.jobs.map(j => {
       const next = j.next_run_kst ? new Date(j.next_run_kst).toLocaleString('ko-KR') : '—';
       const sbrf = document.getElementById('sidebar-next-brief');
@@ -3566,11 +3618,53 @@ async function mbStockList(){
         ${list.map(row).join('') || '<div style="padding:24px;text-align:center;color:var(--mute);font-size:13px">해당 조건의 보고서가 없습니다</div>'}
       </div></div>
       ${rest.length && f === '전체' ? `<div class="m-sec"><b style="font-size:15px;color:var(--sub)">미분석</b></div><div class="m-pad"><div class="m-card" style="overflow:hidden">${rest.map(row).join('')}</div></div>` : ''}
+      <div class="m-sec"><b>📡 종목 스캐너</b><span id="m-scan-meta" style="font-size:11.5px;color:var(--mute)"></span></div>
+      <div class="m-pad"><div class="m-card" id="m-scan" style="overflow:hidden"><div style="padding:14px 16px;font-size:12.5px;color:var(--mute)"><span class="spin"></span> 불러오는 중…</div></div></div>
       <div style="height:8px"></div>`;
     mbLoadSigPerf();
+    mbLoadScanner();
   } catch (e) {
     el.innerHTML = `<div class="m-pad"><div class="m-card" style="padding:20px;color:var(--up);font-size:13px">오류: ${esc(e.message)}</div></div>`;
   }
+}
+let _mbScanPoll = null;
+async function mbLoadScanner(){
+  const box = document.getElementById('m-scan');
+  if (!box) return;
+  try {
+    const d = await api('/api/scanner');
+    if (!d.ok){
+      box.innerHTML = `<div style="padding:14px 16px;font-size:12.5px;color:var(--mute)"><span class="spin"></span> ${esc(d.reason || '준비 중…')}</div>`;
+      clearTimeout(_mbScanPoll); _mbScanPoll = setTimeout(mbLoadScanner, 20000);
+      return;
+    }
+    clearTimeout(_mbScanPoll);
+    const mt = document.getElementById('m-scan-meta');
+    if (mt) mt.textContent = `${d.scanned}종목`;
+    box.innerHTML = d.top.slice(0, 12).map((x, i, a) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:11px 14px${i < a.length - 1 ? ';border-bottom:1px solid var(--line)' : ''}">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:5px">
+            <span style="font-size:14.5px;font-weight:600">${esc(x.ticker)}</span>
+            <span class="grade grade-${x.tone}" style="font-size:9px">${esc(x.grade)} ${x.score.toFixed(0)}</span>
+          </div>
+          <div style="font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums;margin-top:1px">${x.market} · 3M ${fmtPct(x.ret_3m)} · 시장 대비 ${x.rel_strength >= 0 ? '+' : ''}${x.rel_strength}</div>
+        </div>
+        <button class="m-filter" style="height:30px;background:var(--accent);color:#fff" onclick="mbScanAdd('${esc(x.ticker)}','${x.market}',this)">+ 분석</button>
+      </div>`).join('') || '<div style="padding:16px;text-align:center;color:var(--mute);font-size:12.5px">유망 종목 없음</div>';
+  } catch { box.innerHTML = ''; }
+}
+async function mbScanAdd(ticker, market, btn){
+  btn.disabled = true; btn.textContent = '추가…';
+  try {
+    let name = ticker;
+    try { const s = await api(`/api/stock-info/${encodeURIComponent(ticker)}?market=${market}`); name = s.name || ticker; } catch {}
+    await api('/api/watchlist', { method: 'POST', body: JSON.stringify({ ticker, market, name }) }).catch(e => { if (e.message !== 'Already exists') throw e; });
+    await api(`/api/analyze/${ticker}?market=${market}`, { method: 'POST' });
+    toast(`${ticker} 추가 + 분석 시작`);
+    btn.textContent = '분석중 ✓';
+    MB.home = null;
+  } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = '+ 분석'; }
 }
 async function mbLoadSigPerf(){
   const box = document.getElementById('m-sigperf');

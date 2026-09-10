@@ -2222,6 +2222,148 @@ async def market_outlook(refresh: bool = False) -> dict:
     return data
 
 
+# ── 종목 스캐너 (유니버스 모멘텀 랭킹) ───────────────────────────────────────
+
+_scan_cache: dict = {"data": None, "ts": 0.0}
+_scan_running = False
+_SCAN_TTL = 12 * 3600
+_KR_NAMES: dict = {}
+
+
+def _kr_name(code: str) -> str:
+    if code in _KR_NAMES:
+        return _KR_NAMES[code]
+    try:
+        from app.core.datasources.kr import KRDataSource
+
+        info = KRDataSource().get_financials(code).get("info", {}) or {}
+        nm = info.get("shortName") or info.get("longName") or code
+    except Exception:
+        nm = code
+    _KR_NAMES[code] = nm
+    return nm
+
+
+def _compute_scan(top_n: int = 18) -> dict:
+    import yfinance as yf
+
+    from app.core import market_scan as ms
+    from app.core.universe import chunks, exclude_held, universe
+
+    with _session() as session:
+        held = {(w.ticker, w.market) for w in session.query(Watchlist).all()}
+
+    cands = exclude_held(universe(), held)
+    yf_syms = ["SPY"] + [t if m == "US" else f"{t}.KS" for (t, m) in cands]
+
+    price: dict[str, list[float]] = {}
+
+    def _load(batch: list[str]):
+        try:
+            df = yf.download(batch, period="1y", progress=False, group_by="ticker",
+                             threads=True, auto_adjust=True)
+            multi = hasattr(df.columns, "levels")
+            for s in batch:
+                try:
+                    ser = (df[s]["Close"] if multi else df["Close"]).dropna()
+                    if len(ser) >= 60:
+                        price[s] = [float(x) for x in ser.tolist()]
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.warning("scan batch failed (%d syms): %s", len(batch), e)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        list(pool.map(_load, chunks(yf_syms, 90)))
+
+    spy = price.get("SPY")
+    if not spy or len(spy) < 60:
+        return {"ok": False, "reason": "지수 시세를 불러오지 못했습니다."}
+
+    scored = []
+    for (t, m) in cands:
+        c = price.get(t if m == "US" else f"{t}.KS")
+        if not c:
+            continue
+        mp = ms.momentum_profile(c)
+        rsi = mp.get("rsi") or 50
+        if rsi >= 90:                    # 과열 블로우오프 — 추격 위험
+            continue
+        rs = ms.relative_strength(c, spy)
+        score = ms.trend_score(mp, rs)
+        grade, tone = ms.score_label(score)
+        scored.append({
+            "ticker": t, "market": m, "name": t,
+            "score": score, "grade": grade, "tone": tone,
+            "price": mp["price"], "rsi": rsi,
+            "ret_1m": mp["ret_1m"], "ret_3m": mp["ret_3m"], "ret_6m": mp["ret_6m"],
+            "rel_strength": rs, "above_ma200": mp["above_ma200"],
+        })
+
+    # 점수 동률이 많아 상대강도·3개월 수익률을 보조 정렬 키로
+    scored.sort(key=lambda x: (x["score"], x["rel_strength"], x["ret_3m"] or 0), reverse=True)
+    top = scored[:top_n]
+    for x in top:                       # 상위 결과만 한글명 조회
+        if x["market"] == "KR":
+            x["name"] = _kr_name(x["ticker"])
+
+    return {
+        "ok": True,
+        "as_of": date.today().isoformat(),
+        "scanned": len(scored),
+        "universe": len(cands),
+        "top": top,
+    }
+
+
+def _run_scan_bg() -> None:
+    global _scan_running
+    import threading
+
+    if _scan_running:
+        return
+    _scan_running = True
+
+    def _work():
+        global _scan_running
+        import time
+        try:
+            data = _compute_scan()
+            if data.get("ok"):
+                _scan_cache["data"] = data
+                _scan_cache["ts"] = time.time()
+        except Exception as e:
+            logger.warning("scan bg failed: %s", e)
+        finally:
+            _scan_running = False
+
+    threading.Thread(target=_work, daemon=True).start()
+
+
+@app.get("/api/scanner")
+async def market_scanner(refresh: bool = False) -> dict:
+    """S&P 500 + KOSPI 대형주를 모멘텀·상대강도로 스캔 → 관심 밖 유망 종목.
+
+    무거운 작업이라 백그라운드로 돌리고, 결과는 캐시(12h)에서 즉시 반환.
+    """
+    import time
+
+    now = time.time()
+    cached = _scan_cache["data"]
+    fresh = cached and now - _scan_cache["ts"] < _SCAN_TTL
+    if (refresh or not fresh) and not _scan_running:
+        _run_scan_bg()
+    if cached:
+        out = dict(cached)
+        out["stale"] = not fresh
+        out["updating"] = _scan_running
+        return out
+    return {"ok": False, "building": True, "updating": _scan_running,
+            "reason": "스캔을 처음 실행 중입니다. 30초쯤 뒤 새로고침해 주세요."}
+
+
 # ── API 키 설정 ────────────────────────────────────────────────────────────────
 
 def _mask_key(key: str) -> str:

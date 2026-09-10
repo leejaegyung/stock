@@ -333,6 +333,21 @@ def _prewarm_caches() -> None:
         logger.warning("prewarm failed: %s", e)
 
 
+def _scan_market_job() -> None:
+    """종목 스캐너 캐시를 하루 1회 갱신 (S&P500 + KOSPI 대형주 모멘텀 랭킹)."""
+    try:
+        from app.entrypoints.web import _scan_cache, _compute_scan
+        import time
+
+        data = _compute_scan()
+        if data.get("ok"):
+            _scan_cache["data"] = data
+            _scan_cache["ts"] = time.time()
+            logger.info("scanner cache refreshed: %d/%d scanned", data.get("scanned", 0), data.get("universe", 0))
+    except Exception as e:
+        logger.warning("scan_market job failed: %s", e)
+
+
 def _translate_news_job() -> None:
     """번역 안 된 외신 뉴스를 한국어로 채운다 (LLM 미사용, 자체 번역 워크플로우).
 
@@ -407,9 +422,20 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
 
+    # 종목 스캐너: KST 06:40 매일 (미국 장 마감 후 모멘텀 랭킹 갱신)
+    _scheduler.add_job(
+        _scan_market_job,
+        trigger=CronTrigger(hour=6, minute=40, timezone=KST),
+        id="scan_market",
+        replace_existing=True,
+        next_run_time=datetime.now(KST) + timedelta(minutes=2),  # 기동 직후 1회
+        max_instances=1,
+        coalesce=True,
+    )
+
     _scheduler.start()
     logger.info(
-        "Scheduler started. Brief: KST 10:30 | Watcher: KST 12:00, 18:00 | Cleanup: KST 03:00",
+        "Scheduler started. Brief: KST 10:30 | Watcher: KST 12:00, 18:00 | Cleanup: KST 03:00 | Scan: KST 06:40",
     )
     return _scheduler
 
