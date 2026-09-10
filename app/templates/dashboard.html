@@ -467,10 +467,11 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
 @media (max-width:640px){
   .app{display:none!important}
   #m-app{display:flex;flex-direction:column;min-height:100dvh;background:var(--bg)}
-  #modal-bg{padding:0!important;align-items:stretch!important}
-  #modal{width:100%!important;max-width:100%!important;min-height:100dvh!important;border-radius:0!important;border:none!important;padding:16px 16px calc(24px + env(safe-area-inset-bottom))!important}
-  .modal-hd{position:sticky;top:-16px;background:var(--card);padding-top:8px;z-index:2}
+  #modal-bg{padding:0!important;align-items:stretch!important;background:var(--bg)!important;overscroll-behavior:contain}
+  #modal{width:100%!important;max-width:100%!important;min-height:100%!important;border-radius:0!important;border:none!important;background:var(--card)!important;padding:14px 16px calc(32px + env(safe-area-inset-bottom))!important}
+  .modal-hd{position:sticky;top:0;background:var(--card);margin:-14px 0 12px;padding:12px 0;z-index:2}
 }
+html.modal-lock,html.modal-lock body{overflow:hidden}
 #m-app *{box-sizing:border-box}
 .m-head{position:sticky;top:0;z-index:20;background:var(--bg);display:flex;align-items:center;gap:8px;padding:12px 20px 10px}
 .m-logo{width:26px;height:26px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0}
@@ -1127,6 +1128,7 @@ function nav(name, btn){
   refreshCurrent();
 }
 window.addEventListener('hashchange', () => {
+  if (window.matchMedia('(max-width:640px)').matches) return;
   const h = location.hash.slice(1);
   if (PANELS.includes(h) && h !== _panel) nav(h);
 });
@@ -2218,7 +2220,7 @@ function humanizeReport(md){
 async function showReport(id){
   document.getElementById('modal-hd-info').innerHTML = '<span style="color:var(--mute)">로딩 중…</span>';
   document.getElementById('modal-body').innerHTML = '';
-  document.getElementById('modal-bg').classList.add('open');
+  openModal();
   try {
     const r = await api(`/api/reports/${id}`);
     _modalRaw = r.report_md || '';
@@ -2233,8 +2235,47 @@ async function showReport(id){
   } catch(e){ document.getElementById('modal-body').innerHTML = `<p style="color:var(--up)">${esc(e.message)}</p>`; }
 }
 function modalBgClick(e){ if (e.target === document.getElementById('modal-bg')) closeModal(); }
-function closeModal(){ document.getElementById('modal-bg').classList.remove('open'); }
+let _modalOpen = false, _navSuppress = false;
+function openModal(){
+  if (_modalOpen) return;
+  _modalOpen = true;
+  document.getElementById('modal-bg').classList.add('open');
+  document.documentElement.classList.add('modal-lock');
+  try { history.pushState({ ov: 'modal' }, ''); } catch(e) {}
+}
+function _hideModal(){
+  _modalOpen = false;
+  document.getElementById('modal-bg').classList.remove('open');
+  document.documentElement.classList.remove('modal-lock');
+}
+function closeModal(){
+  if (!_modalOpen) return;
+  _hideModal();
+  if (history.state && history.state.ov === 'modal'){ _navSuppress = true; history.back(); }
+}
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+/* ── 안드로이드 뒤로가기: 모달·모바일 화면 이동을 히스토리와 연결 ── */
+window.addEventListener('popstate', () => {
+  if (_navSuppress){ _navSuppress = false; return; }
+  if (_modalOpen){ _hideModal(); return; }
+  if (MB_MQ.matches) mbBack();
+});
+function mbBack(){
+  if (MB.view === 'stock' && MB.stockView === 'detail'){
+    MB.stockView = 'list';
+    mbNav('stock');
+    _pushTrap();
+    return;
+  }
+  if (MB.view !== 'home'){
+    mbNav('home');
+    _pushTrap();
+    return;
+  }
+  // 홈 루트 — 브라우저가 이미 이전 페이지로 이동한 상태(앱 종료). 그대로 둔다.
+}
+function _pushTrap(){ try { history.pushState({ mb: 1 }, ''); } catch(e) {} }
 async function copyModal(){ try { await navigator.clipboard.writeText(_modalRaw); toast('복사됨'); } catch { toast('복사 실패', 'err'); } }
 
 /* ══ 가계부 & 자산 ════════════════════════════════════════════════════════ */
@@ -3586,6 +3627,7 @@ function mbBoot(){
   mbThemeBtn();
   mbRenderTabbar();
   mbNav('home');
+  _pushTrap();          // 안드로이드 뒤로가기 트랩
   clearInterval(MB.poll);
   MB.poll = setInterval(() => {
     if (document.hidden || !MB_MQ.matches) return;
