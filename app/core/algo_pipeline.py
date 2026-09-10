@@ -263,12 +263,38 @@ def _parse_float(val) -> float | None:
         return None
 
 
+# 거시지표 키: 구(한글 스칼라) · 신(snake_case dict {price/value}) 모두 대응
+_MACRO_ALIASES = {
+    "VIX": ("VIX", "vix"),
+    "CAPE": ("CAPE", "cape"),
+    "10Y 금리": ("10Y 금리", "10Y", "bonds_10y"),
+    "Gold": ("Gold", "gold"),
+    "USD/KRW": ("USD/KRW", "usd_krw"),
+    "S&P 500": ("S&P 500", "sp500"),
+}
+
+
+def _mv(macro: dict, key: str) -> float | None:
+    """거시 지표 스칼라 값을 형태 무관하게 추출."""
+    if not macro:
+        return None
+    for k in _MACRO_ALIASES.get(key, (key,)):
+        if k in macro and macro[k] is not None:
+            v = macro[k]
+            if isinstance(v, dict):
+                v = v.get("price", v.get("value"))
+            f = _parse_float(v)
+            if f is not None:
+                return f
+    return None
+
+
 def _score_macro(macro: dict) -> tuple[int, list[str]]:
     score = 0
     notes: list[str] = []
 
     # VIX (0-8)
-    vix = _parse_float(macro.get("VIX"))
+    vix = _mv(macro, "VIX")
     if vix is not None:
         if   vix < 15:  score += 8; notes.append(f"VIX {vix:.1f} — 시장 안정")
         elif vix < 20:  score += 6; notes.append(f"VIX {vix:.1f} — 보통")
@@ -279,7 +305,7 @@ def _score_macro(macro: dict) -> tuple[int, list[str]]:
         score += 4
 
     # CAPE (0-8)
-    cape = _parse_float(macro.get("CAPE"))
+    cape = _mv(macro, "CAPE")
     if cape is not None:
         j = cape_judgment(cape)
         if   cape < 20:  score += 8; notes.append(f"CAPE {cape:.1f} — {j}")
@@ -291,7 +317,7 @@ def _score_macro(macro: dict) -> tuple[int, list[str]]:
         score += 4
 
     # 10Y 금리 (0-4)  높을수록 주식 밸류에이션 부담
-    rate = _parse_float(macro.get("10Y 금리") or macro.get("10Y"))
+    rate = _mv(macro, "10Y 금리")
     if rate is not None:
         if   rate < 3:   score += 4; notes.append(f"10Y 금리 {rate:.2f}% — 주식 우호적")
         elif rate < 4:   score += 2; notes.append(f"10Y 금리 {rate:.2f}% — 중립")
@@ -391,11 +417,11 @@ def _bear_signals(ta: dict, fund: dict, macro: dict) -> list[str]:
     if eg is not None and eg < -0.1:
         sigs.append(f"이익 성장률 {eg*100:.1f}% — 역성장")
 
-    vix = _parse_float(macro.get("VIX"))
+    vix = _mv(macro, "VIX")
     if vix and vix > 25:
         sigs.append(f"VIX {vix:.1f} — 시장 공포 구간")
 
-    cape = _parse_float(macro.get("CAPE"))
+    cape = _mv(macro, "CAPE")
     if cape and cape > 35:
         sigs.append(f"CAPE {cape:.1f} — 시장 전체 버블 경고")
 
@@ -430,7 +456,7 @@ def _quant_metrics(ts: int, fs: int, ms: int, fund: dict, macro: dict) -> dict:
     val_parts: list[str] = []
     if pe and roe:
         val_parts.append(per_roe_judgment(pe, roe * 100, pe * 1.1, roe * 90))
-    cape_val = _parse_float(macro.get("CAPE"))
+    cape_val = _mv(macro, "CAPE")
     if cape_val:
         val_parts.append(f"시장 CAPE {cape_val:.1f}: {cape_judgment(cape_val)}")
 
@@ -720,22 +746,20 @@ def morning_brief_algo(watchlist: list[dict], date_str: str | None = None) -> st
 
 
 def _format_brief(date_str: str, macro: dict, results: list[dict]) -> str:
-    vix  = macro.get("VIX", "-")
-    cape = macro.get("CAPE", "-")
-    gold = macro.get("Gold", "-")
-    ukrw = macro.get("USD/KRW", "-")
-    r10y = macro.get("10Y 금리", "-")
+    vix_v, cape_v = _mv(macro, "VIX"), _mv(macro, "CAPE")
+    gold_v, ukrw_v, r10y_v = _mv(macro, "Gold"), _mv(macro, "USD/KRW"), _mv(macro, "10Y 금리")
 
-    cape_j = ""
-    c = _parse_float(macro.get("CAPE"))
-    if c:  cape_j = f" → {cape_judgment(c)}"
+    def _f(v: float | None, fmt: str = "{:,.1f}") -> str:
+        return fmt.format(v) if v is not None else "-"
+
+    cape_j = f" → {cape_judgment(cape_v)}" if cape_v else ""
 
     L = [
         f"# 📈 아침 브리핑 (알고리즘) — {date_str}",
         "",
         "## 🌍 오늘의 시장",
-        f"- VIX: **{vix}** | CAPE: **{cape}**{cape_j} | 금: {gold}",
-        f"- USD/KRW: {ukrw} | 미국 10Y 금리: {r10y}",
+        f"- VIX: **{_f(vix_v)}** | CAPE: **{_f(cape_v)}**{cape_j} | 금: {_f(gold_v, '${:,.0f}')}",
+        f"- USD/KRW: {_f(ukrw_v, '{:,.0f}원')} | 미국 10Y 금리: {_f(r10y_v, '{:.2f}%')}",
         "",
         "## 📊 보유 종목별 브리핑",
     ]
