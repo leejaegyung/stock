@@ -34,7 +34,10 @@ def _run_morning_brief() -> None:
 
     with factory() as session:
         rows = session.query(Watchlist).all()
-        watchlist = [{"ticker": r.ticker, "market": r.market} for r in rows]
+        watchlist = [
+            {"ticker": r.ticker, "market": r.market, "held": (r.quantity or 0) > 0}
+            for r in rows
+        ]
 
     if not watchlist:
         logger.info("No watchlist entries; skipping brief.")
@@ -44,13 +47,15 @@ def _run_morning_brief() -> None:
 
     # 종목별 개별 저장
     import hashlib
+    import json as _json
     from datetime import datetime as _dt
     from app.core.algo_pipeline import classify_news_algo
+    from app.entrypoints.web import _report_metrics
 
     for stock in watchlist:
         ticker, market = stock["ticker"], stock["market"]
         try:
-            result = analyze_stock_algo(ticker, market, date_str, macro_data=shared_macro)
+            result = analyze_stock_algo(ticker, market, date_str, macro_data=shared_macro, held=stock["held"])
             advice = result.get("advice", {})
             with factory() as session:
                 # 이전 보고서 삭제 후 새 보고서 저장
@@ -63,6 +68,7 @@ def _run_morning_brief() -> None:
                     verdict=advice.get("verdict"),
                     confidence=advice.get("confidence"),
                     report_md=advice.get("brief_section", ""),
+                    metrics_json=_json.dumps(_report_metrics(result), ensure_ascii=False),
                 ))
                 # 뉴스 저장 (url_hash dedup)
                 for item in result.get("raw_news", []):
@@ -186,14 +192,19 @@ def _run_watcher() -> None:
 def _trigger_deep_analysis(ticker: str, market: str, client, factory) -> None:
     """Run algorithmic analysis for a ticker and save the report."""
     import hashlib
+    import json as _json
     from datetime import date, datetime as _dt
     from app.core.algo_pipeline import analyze_stock_algo, classify_news_algo
     from app.db.models import AnalysisReport
+    from app.entrypoints.web import _report_metrics
 
     date_str = date.today().isoformat()
     logger.info("Auto algo-analysis triggered: %s [%s]", ticker, market)
     try:
-        result = analyze_stock_algo(ticker, market, date_str)
+        with factory() as session:
+            wl_row = session.query(Watchlist).filter_by(ticker=ticker, market=market).first()
+            held = bool(wl_row and (wl_row.quantity or 0) > 0)
+        result = analyze_stock_algo(ticker, market, date_str, held=held)
         advice = result.get("advice", {})
         with factory() as session:
             # 이전 보고서 삭제 후 새 보고서 저장
@@ -208,6 +219,7 @@ def _trigger_deep_analysis(ticker: str, market: str, client, factory) -> None:
                 verdict=advice.get("verdict", ""),
                 confidence=advice.get("confidence", ""),
                 report_md=advice.get("brief_section", ""),
+                metrics_json=_json.dumps(_report_metrics(result), ensure_ascii=False),
             ))
             # 뉴스 저장 (url_hash dedup)
             for item in result.get("raw_news", []):
@@ -364,11 +376,11 @@ def _discover_and_analyze(top: list) -> None:
     factory = get_session_factory(settings.db_path)
 
     with factory() as session:
-        held = {(w.ticker, w.market) for w in session.query(Watchlist).all()}
+        in_watchlist = {(w.ticker, w.market) for w in session.query(Watchlist).all()}
 
     picks = [
         x for x in top
-        if (x["ticker"], x["market"]) not in held and x.get("grade") == "유망" and x.get("score", 0) >= 66
+        if (x["ticker"], x["market"]) not in in_watchlist and x.get("grade") == "유망" and x.get("score", 0) >= 66
     ][:DISCOVER_MAX]
     if not picks:
         logger.info("discover: no qualifying candidates")
@@ -381,7 +393,7 @@ def _discover_and_analyze(top: list) -> None:
     for p in picks:
         ticker, market = p["ticker"], p["market"]
         try:
-            result = analyze_stock_algo(ticker, market, date_str)
+            result = analyze_stock_algo(ticker, market, date_str, held=False)  # 관심목록 밖 = 미보유
             advice = result.get("advice", {})
             import json as _json
             from app.entrypoints.web import _report_metrics

@@ -46,7 +46,9 @@ app/core/translate.py            — 외신 뉴스 한국어 자동 번역 (유�
                                    체인. LLM 미사용. 원문·원문링크 보존, 결과는 NewsItem 에 캐시
 app/core/market_scan.py          — 시장 국면·섹터 모멘텀 순수 함수 (Layer 1)
 app/core/trade_plan.py           — 매매 타이밍·가격대 순수 함수 (Layer 1): 이동평균·볼린저·ATR·
-                                   스윙 고저 → 매수 구간/분할 추가매수/목표가/손절가/손익비. 리포트에 삽입
+                                   스윙 고저 → 매수 구간/분할 추가매수/목표가/손절가/손익비. 리포트에 삽입.
+                                   held=False(관심종목인데 수량 미기입=미보유)면 verdict 무관하게
+                                   "신규 진입" 관점 문구로 전환 (analyze_stock_algo(..., held=) 로 전달)
 app/core/signal_perf.py          — 시그널 성과 집계 순수 함수 (Layer 1): 과거 결론 vs 이후 수익률 →
                                    결론별·확신도별 적중률·평균 수익률. /api/signals/performance
 app/core/universe.py             — 스캐너 종목 유니버스 (Layer 1, 순수 데이터): S&P 500 + KOSPI

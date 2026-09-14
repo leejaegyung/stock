@@ -81,8 +81,13 @@ def fmt_px(v: float, market: str) -> str:
     return f"₩{v:,.0f}"
 
 
-def trade_plan_md(tp: dict | None, market: str) -> list[str]:
-    """매매 계획을 리포트용 마크다운 줄 리스트로 (verdict 별 문구)."""
+def trade_plan_md(tp: dict | None, market: str, held: bool = True) -> list[str]:
+    """매매 계획을 리포트용 마크다운 줄 리스트로.
+
+    :param held: 실제 보유 수량이 있는지. False(관심종목·미보유)면 verdict 와
+        무관하게 '신규 진입' 관점으로 서술한다 — 이미 없는 물량을 "추가매수"
+        하거나 "비중 축소"할 수는 없기 때문.
+    """
     if not tp:
         return []
 
@@ -91,6 +96,21 @@ def trade_plan_md(tp: dict | None, market: str) -> list[str]:
 
     vd = tp.get("verdict", "보유")
     lines = ["**매매 타이밍·가격** (차트 기준 자동 계산 — 참고용, 투자자문 아님)"]
+
+    if not held:
+        if vd == "매도":
+            lines.append(f"- ⚠ 현재 신호는 매도(비선호) — 신규 진입은 보류를 권장합니다.")
+            lines.append(f"- 그래도 지켜본다면 참고 구간: {f(tp['entry_low'])} ~ {f(tp['entry_high'])}, 손절 {f(tp['stop'])}")
+        else:
+            lines.append(f"- 신규 진입 희망가: {f(tp['entry_low'])} ~ {f(tp['entry_high'])} (현재 {f(tp['price'])})")
+            lines.append(f"- 분할 매수 2차: {f(tp['add_zone'])} 부근까지 밀릴 때")
+            lines.append(f"- 목표가: 1차 {f(tp['target1'])} · 2차 {f(tp['target2'])}")
+            lines.append(f"- 손절 기준(진입 후): {f(tp['stop'])} 이탈 시")
+            if tp.get("rr"):
+                lines.append(f"- 손익비(1차 목표 기준): 약 {tp['rr']} : 1")
+        lines.append("")
+        return lines
+
     if vd in ("매수", "추가매수"):
         lines.append(f"- 매수 희망 구간: {f(tp['entry_low'])} ~ {f(tp['entry_high'])} (현재 {f(tp['price'])})")
         lines.append(f"- 분할 추가매수: {f(tp['add_zone'])} 부근까지 밀릴 때")

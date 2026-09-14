@@ -528,6 +528,7 @@ def _stock_report_md(
     quant: dict, news_lines: list[str],
     conf: dict | None = None,
     tplan: dict | None = None,
+    held: bool = True,
 ) -> str:
     total = ts + fs + ms + ns
     vd, _band_cf = _verdict(total)
@@ -611,7 +612,7 @@ def _stock_report_md(
     ]
 
     # 매매 타이밍·가격
-    L += trade_plan_md(tplan, market)
+    L += trade_plan_md(tplan, market, held=held)
 
     # Bull / Bear
     if bulls:
@@ -638,9 +639,13 @@ def analyze_stock_algo(
     market: str,
     date_str: str,
     macro_data: dict | None = None,
+    held: bool = True,
 ) -> dict:
     """
     LLM-free stock analysis. Same output contract as pipeline.analyze_stock().
+
+    :param held: 실제 보유 수량이 있는지 (관심종목이라도 수량 미기입이면 False).
+        매매 타이밍 섹션의 문구가 "추가매수/비중축소" 대신 "신규 진입"으로 바뀐다.
     """
     ds = USDataSource() if market.upper() != "KR" else KRDataSource()
 
@@ -709,6 +714,8 @@ def analyze_stock_algo(
 
     # Layer 3c — 매매 타이밍·가격대
     tplan = trade_plan(ta, quant, vd)
+    if tplan is not None:
+        tplan["held"] = held
 
     # Layer 4 — 리포트
     report_md = _stock_report_md(
@@ -716,6 +723,7 @@ def analyze_stock_algo(
         ta, fund, macro,
         ts, fs, ms, ns,
         bulls, bears, quant, news_lines, conf, tplan,
+        held=held,
     )
 
     key_reasons = (bulls if vd in ("매수", "추가매수") else bears)[:3]
@@ -735,6 +743,7 @@ def analyze_stock_algo(
         "bear_signals":    bears,
         "quant_risk":      quant,
         "trade_plan":      tplan,
+        "held":            held,
         "confidence":      conf,
         "research_summary": {
             "verdict": f"강세 신호 {len(bulls)}개 / 약세 신호 {len(bears)}개",

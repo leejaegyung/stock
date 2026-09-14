@@ -410,6 +410,7 @@ def _report_metrics(result: dict) -> dict:
         "target": target,
         "gap_pct": round((target / price - 1) * 100, 1) if (target and price) else None,
         "trade_plan": result.get("trade_plan"),
+        "held": result.get("held", True),
         "bull_count": len(bulls),
         "bear_count": len(bears),
         "key_reasons": (advice.get("key_reasons") or [])[:3],
@@ -485,9 +486,13 @@ def _bg_analyze(ticker: str, market: str, date_str: str) -> None:
     from datetime import datetime as _dt
     from app.core.algo_pipeline import analyze_stock_algo, classify_news_algo
 
+    with _session() as session:
+        wl_row = session.query(Watchlist).filter_by(ticker=ticker, market=market).first()
+        held = bool(wl_row and (wl_row.quantity or 0) > 0)
+
     import time as _t
     _t0 = _t.perf_counter()
-    result = analyze_stock_algo(ticker, market, date_str)
+    result = analyze_stock_algo(ticker, market, date_str, held=held)
     result["_duration_sec"] = round(_t.perf_counter() - _t0, 1)
     advice = result.get("advice", {})
 
@@ -588,7 +593,10 @@ def _bg_brief() -> None:
 
     with _session() as session:
         watchlist = session.query(Watchlist).all()
-        items = [{"ticker": w.ticker, "market": w.market} for w in watchlist]
+        items = [
+            {"ticker": w.ticker, "market": w.market, "held": (w.quantity or 0) > 0}
+            for w in watchlist
+        ]
 
     if not items:
         logger.info("brief: watchlist is empty, skipping")
@@ -600,7 +608,7 @@ def _bg_brief() -> None:
     for stock in items:
         ticker, market = stock["ticker"], stock["market"]
         try:
-            result = analyze_stock_algo(ticker, market, date_str, macro_data=shared_macro)
+            result = analyze_stock_algo(ticker, market, date_str, macro_data=shared_macro, held=stock["held"])
             advice = result.get("advice", {})
             with _session() as session:
                 # 이전 보고서 삭제 후 새 보고서 저장

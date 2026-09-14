@@ -61,6 +61,28 @@ def test_md_empty_when_none():
     assert trade_plan_md(None, "US") == []
 
 
+def test_md_not_held_uses_entry_framing_regardless_of_verdict():
+    tp = trade_plan(_TA, _QUANT, "매수")
+    for vd in ("매수", "보유"):
+        lines = trade_plan_md(dict(tp, verdict=vd), "US", held=False)
+        assert any("신규 진입 희망가" in ln for ln in lines)
+        assert not any("추가매수" in ln and "분할" not in ln for ln in lines)  # '보유 유지'류 문구 없음
+        assert not any("보유 유지" in ln for ln in lines)
+
+
+def test_md_not_held_sell_verdict_warns_instead_of_entry():
+    tp = trade_plan(_TA, _QUANT, "매도")
+    lines = trade_plan_md(tp, "US", held=False)
+    assert any("보류를 권장" in ln for ln in lines)
+    assert not any("신규 진입 희망가" in ln for ln in lines)
+
+
+def test_md_held_true_is_default_and_unchanged():
+    tp = trade_plan(_TA, _QUANT, "보유")
+    assert trade_plan_md(tp, "US") == trade_plan_md(tp, "US", held=True)
+    assert any("보유 유지" in ln for ln in trade_plan_md(tp, "US"))
+
+
 def test_fmt_px_by_market():
     assert fmt_px(1234.5, "US") == "$1,234.50"
     assert fmt_px(1234.5, "KR") == "₩1,234"
