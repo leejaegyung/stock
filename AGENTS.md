@@ -51,6 +51,10 @@ app/core/trade_plan.py           — 매매 타이밍·가격대 순수 함수 (
                                    "신규 진입" 관점 문구로 전환 (analyze_stock_algo(..., held=) 로 전달)
 app/core/signal_perf.py          — 시그널 성과 집계 순수 함수 (Layer 1): 과거 결론 vs 이후 수익률 →
                                    결론별·확신도별 적중률·평균 수익률. /api/signals/performance
+app/core/chart_patterns.py       — 차트 패턴 인식 순수 함수 (Layer 1): 국소극값 배열로 헤드앤숄더·
+                                   확산형·삼각형·사각형·더블탑/바텀 판정 + N일 신고가/신저가 돌파.
+                                   Lo·Mamaysky·Wang(2000)/Brock·Lakonishok·LeBaron(1992) 근사 구현.
+                                   analyze_stock_algo 에서 기술점수 가감 + bull/bear 신호로 반영
 app/core/universe.py             — 스캐너 종목 유니버스 (Layer 1, 순수 데이터): S&P 500 + KOSPI
                                    대형주 목록. /api/scanner 가 모멘텀·상대강도로 랭킹 (KST 06:40 갱신).
                                    스케줄러가 상위 유망 종목(관심목록 밖)을 자동 정식 분석 →

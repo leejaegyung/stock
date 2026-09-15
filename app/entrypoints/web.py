@@ -410,6 +410,8 @@ def _report_metrics(result: dict) -> dict:
         "target": target,
         "gap_pct": round((target / price - 1) * 100, 1) if (target and price) else None,
         "trade_plan": result.get("trade_plan"),
+        "chart_pattern": result.get("chart_pattern"),
+        "chart_breakout": result.get("chart_breakout"),
         "held": result.get("held", True),
         "bull_count": len(bulls),
         "bear_count": len(bears),

@@ -9,6 +9,7 @@ from datetime import date
 
 import pandas as pd
 
+from app.core.chart_patterns import detect_pattern, support_resistance_break
 from app.core.confidence import analysis_confidence, improvement_hints
 from app.core.formulas import (
     cashflow_pattern, cape_judgment, per_roe_judgment,
@@ -529,6 +530,8 @@ def _stock_report_md(
     conf: dict | None = None,
     tplan: dict | None = None,
     held: bool = True,
+    pattern: dict | None = None,
+    breakout: dict | None = None,
 ) -> str:
     total = ts + fs + ms + ns
     vd, _band_cf = _verdict(total)
@@ -574,6 +577,23 @@ def _stock_report_md(
         if ta.get("ret_3m") is not None:  rets.append(f"3M {ta['ret_3m']:+.1f}%")
         if ta.get("ret_6m") is not None:  rets.append(f"6M {ta['ret_6m']:+.1f}%")
         if rets:  L.append(f"- 수익률: {' / '.join(rets)}")
+        L.append("")
+
+    # 차트 패턴 (Lo·Mamaysky·Wang 2000 / Brock·Lakonishok·LeBaron 1992 근사 구현)
+    if pattern or breakout:
+        L.append("**차트 패턴 분석** (학술 근거: Lo·Mamaysky·Wang 2000, Brock·Lakonishok·LeBaron 1992)")
+        if pattern:
+            icon = {"bull": "🟢", "bear": "🔴"}.get(pattern["bias"], "🟡")
+            L.append(f"- {icon} {pattern['name']}")
+        else:
+            L.append("- 뚜렷한 전형적 패턴 없음")
+        if breakout:
+            icon = "🟢" if breakout["bias"] == "bull" else "🔴"
+            L.append(f"- {icon} {breakout['name']}")
+        L.append("")
+    elif ta.get("ok"):
+        L.append("**차트 패턴 분석** (학술 근거: Lo·Mamaysky·Wang 2000, Brock·Lakonishok·LeBaron 1992)")
+        L.append("- 뚜렷한 전형적 패턴 없음 (박스권 이탈 없음)")
         L.append("")
 
     # 펀더멘털
@@ -682,12 +702,30 @@ def analyze_stock_algo(
     ms, m_notes      = _score_macro(macro)
     ns, news_lines   = _score_news(news)
 
+    # Layer 1b — 차트 패턴 인식 (Lo·Mamaysky·Wang 2000 / Brock·Lakonishok·LeBaron 1992)
+    closes_list = df["Close"].dropna().tolist() if (not df.empty and "Close" in df.columns) else []
+    pattern  = detect_pattern(closes_list)
+    breakout = support_resistance_break(closes_list)
+    for sig in (pattern, breakout):
+        if sig and sig["bias"] == "bull":
+            ts = min(30, ts + 2)
+        elif sig and sig["bias"] == "bear":
+            ts = max(0, ts - 2)
+
     total = ts + fs + ms + ns
     vd, _band_cf = _verdict(total)
 
     # Layer 2 — Bull / Bear 신호
     bulls = _bull_signals(ta, fund, macro)
     bears = _bear_signals(ta, fund, macro)
+    for sig, tag in ((pattern, "차트 패턴"), (breakout, "돌파")):
+        if not sig:
+            continue
+        label = f"[{tag}] {sig['name']}"
+        if sig["bias"] == "bull":
+            bulls = bulls + [label]
+        elif sig["bias"] == "bear":
+            bears = bears + [label]
 
     # Layer 3 — 계량 검증 (§4)
     quant = _quant_metrics(ts, fs, ms, fund, macro)
@@ -723,7 +761,7 @@ def analyze_stock_algo(
         ta, fund, macro,
         ts, fs, ms, ns,
         bulls, bears, quant, news_lines, conf, tplan,
-        held=held,
+        held=held, pattern=pattern, breakout=breakout,
     )
 
     key_reasons = (bulls if vd in ("매수", "추가매수") else bears)[:3]
@@ -743,6 +781,8 @@ def analyze_stock_algo(
         "bear_signals":    bears,
         "quant_risk":      quant,
         "trade_plan":      tplan,
+        "chart_pattern":   pattern,
+        "chart_breakout":  breakout,
         "held":            held,
         "confidence":      conf,
         "research_summary": {
