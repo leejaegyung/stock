@@ -436,6 +436,8 @@ input[type="number"],input[inputmode="numeric"]{font-variant-numeric:tabular-num
 .toast{background:var(--card);border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font-size:12px;min-width:180px;max-width:300px;color:var(--ink);box-shadow:0 4px 16px var(--shadow)}
 .toast.ok{border-left:2px solid var(--up)}
 .toast.err{border-left:2px solid var(--accent-strong)}
+.toast.done{border-left:3px solid var(--accent);background:var(--accent-soft);font-weight:600;cursor:pointer;min-width:220px}
+.toast.done:hover{background:var(--accent-line)}
 #modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:flex-start;justify-content:center;padding:48px 16px;overflow-y:auto}
 #modal-bg.open{display:flex}
 #modal{background:var(--card);border:1px solid var(--line-2);border-radius:14px;width:min(720px,100%);padding:20px}
@@ -1084,6 +1086,38 @@ function toast(msg, type='ok'){
   document.getElementById('toast').appendChild(el);
   setTimeout(() => el.remove(), 3500);
 }
+
+/* ══ 완료 알림 — 탭을 보고 있지 않아도 재분석·브리핑 완료를 놓치지 않도록 ══
+   1) 탭이 보이는 중: 오래 유지되는 강조 토스트(클릭하면 결과로 이동)
+   2) 탭이 백그라운드: 제목에 '(N)' 표시 + (권한 있으면) OS 알림도 함께 */
+const _origTitle = document.title;
+let _unreadDone = 0;
+let _notifyAsked = false;
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden){ _unreadDone = 0; document.title = _origTitle; }
+});
+function notifyDone(msg, onClick){
+  const el = document.createElement('div');
+  el.className = 'toast done';
+  el.textContent = '✓ ' + msg;
+  if (onClick){ el.onclick = () => { onClick(); el.remove(); }; }
+  document.getElementById('toast').appendChild(el);
+  setTimeout(() => el.remove(), 9000);
+
+  if (document.hidden){
+    _unreadDone++;
+    document.title = `(${_unreadDone}) ${_origTitle}`;
+    try {
+      if (window.Notification && Notification.permission === 'granted'){
+        const n = new Notification('StockAI', { body: msg, tag: 'stockai-analysis' });
+        n.onclick = () => { window.focus(); if (onClick) onClick(); n.close(); };
+      } else if (window.Notification && Notification.permission === 'default' && !_notifyAsked){
+        _notifyAsked = true;
+        Notification.requestPermission().catch(()=>{});
+      }
+    } catch(e) {}
+  }
+}
 async function api(path, opts={}){
   const r = await fetch(path, { headers:{'Content-Type':'application/json'}, ...opts });
   if (!r.ok){ const e = await r.json().catch(()=>({ detail: r.statusText })); throw new Error(e.detail || r.statusText); }
@@ -1683,43 +1717,61 @@ function renderHomeAI(watchlist){
     </div>`;
 }
 
-/* ── 분석 / 브리핑 ── */
+/* ── 분석 / 브리핑 ──
+   완료 판정은 반드시 "리포트 id 가 바뀌었는가"로 한다 — 재분석 대상은 거의
+   항상 이미 리포트가 있으므로, 단순히 "리포트 존재 여부"만 보면 시작하자마자
+   구 리포트를 보고 오탐(false positive)한다. */
 async function analyze(ticker, market){
   const key = ticker + '-' + market;
+  if (analyzing.has(key)){ toast('이미 분석 중입니다'); return; }
   analyzing.add(key);
   try {
+    const before = await api('/api/home').catch(() => null);
+    const prevRow = before && before.watchlist.find(s => s.ticker === ticker && s.market === market);
+    const prevId = prevRow && prevRow.report && prevRow.report.id;
+
     await api(`/api/analyze/${ticker}?market=${market}`, { method:'POST' });
     toast(`${ticker} 분석 시작 (3~5분 소요)`);
+    let n = 0;
     const poll = setInterval(async () => {
+      if (++n > 60){ clearInterval(poll); analyzing.delete(key); toast(`${ticker} 분석이 오래 걸리고 있어요 — 잠시 후 새로고침해 보세요`, 'err'); return; }
       const d = await api('/api/home').catch(()=>null);
       if (!d) return;
-      const found = d.watchlist.find(s => s.ticker === ticker && s.market === market && s.report);
-      if (found?.report){
+      const found = d.watchlist.find(s => s.ticker === ticker && s.market === market);
+      if (found?.report && found.report.id !== prevId){
         clearInterval(poll); analyzing.delete(key);
-        toast(`${ticker} 분석 완료 → ${found.report.verdict}`);
+        notifyDone(`${ticker} 분석 완료 → ${found.report.verdict}`, () => showReport(found.report.id));
         if (_panel === 'home') refreshHome();
         if (_panel === 'reports') loadReports();
       }
-    }, 30000);
+    }, 10000);
   } catch(e){ analyzing.delete(key); toast(e.message, 'err'); }
 }
 
 async function runBrief(){
-  ['btn-brief-home','btn-brief-settings'].forEach(id => { const b = document.getElementById(id); if (b){ b.disabled = true; b.innerHTML = '<span class="spin"></span>'; } });
+  const btnIds = ['btn-brief-home','btn-brief-settings'];
+  const resetBtns = () => btnIds.forEach(id => { const b = document.getElementById(id); if (b){ b.disabled = false; b.textContent = id === 'btn-brief-settings' ? '지금 실행' : '실행'; } });
+  btnIds.forEach(id => { const b = document.getElementById(id); if (b){ b.disabled = true; b.innerHTML = '<span class="spin"></span>'; } });
   try {
+    const before = await api('/api/home').catch(() => null);
+    const prevBriefId = before && before.brief_today;
+
     await api('/api/brief', { method:'POST' });
     toast('브리핑 실행 시작');
+    let n = 0;
     const poll = setInterval(async () => {
+      if (++n > 60){ clearInterval(poll); resetBtns(); toast('브리핑이 오래 걸리고 있어요 — 잠시 후 새로고침해 보세요', 'err'); return; }
       const d = await api('/api/home').catch(()=>null);
-      if (d?.brief_today){
-        clearInterval(poll); toast('브리핑 완료');
+      if (d?.brief_today && d.brief_today !== prevBriefId){
+        clearInterval(poll);
+        notifyDone('오늘의 브리핑 완료', () => showReport(d.brief_today));
         renderBriefBanner(d.brief_today, d.today);
-        ['btn-brief-home','btn-brief-settings'].forEach(id => { const b = document.getElementById(id); if (b){ b.disabled = false; b.textContent = id === 'btn-brief-settings' ? '지금 실행' : '실행'; } });
+        resetBtns();
       }
-    }, 30000);
+    }, 10000);
   } catch(e){
     toast(e.message, 'err');
-    ['btn-brief-home','btn-brief-settings'].forEach(id => { const b = document.getElementById(id); if (b){ b.disabled = false; b.textContent = id === 'btn-brief-settings' ? '지금 실행' : '실행'; } });
+    resetBtns();
   }
 }
 
@@ -2032,11 +2084,28 @@ async function scanAdd(ticker, market, btn){
     await api('/api/watchlist', { method:'POST', body: JSON.stringify({ ticker, market, name }) }).catch(e => {
       if (e.message !== 'Already exists') throw e;
     });
+    const hist = await api(`/api/reports/history/${encodeURIComponent(ticker)}?market=${market}`).catch(() => null);
+    const prevId = hist && hist.points && hist.points.length ? hist.points[hist.points.length - 1].id : null;
+
     await api(`/api/analyze/${ticker}?market=${market}`, { method:'POST' });
     toast(`${ticker} 관심종목 추가 + 분석 시작 (3~5분)`);
     btn.textContent = '분석 중 ✓';
     _pfMap = {}; _paLoaded = false;
     if (_panel === 'reports') setTimeout(loadReports, 800);
+
+    let n = 0;
+    const poll = setInterval(async () => {
+      if (++n > 60){ clearInterval(poll); return; }
+      const d = await api('/api/home').catch(() => null);
+      if (!d) return;
+      const found = d.watchlist.find(s => s.ticker === ticker && s.market === market);
+      if (found?.report && found.report.id !== prevId){
+        clearInterval(poll);
+        notifyDone(`${ticker} 분석 완료 → ${found.report.verdict}`, () => showReport(found.report.id));
+        if (_panel === 'home') refreshHome();
+        if (_panel === 'reports') loadReports();
+      }
+    }, 10000);
   } catch(e){ toast(e.message, 'err'); btn.disabled = false; btn.textContent = '+ 분석'; }
 }
 const GRADE_TONE = { 유망:'good', 관심:'mid', 중립:'warn', 주의:'bad' };
@@ -3461,7 +3530,8 @@ async function mbAnalyzeTicker(ticker, market, onDone){
       const w = h.watchlist.find(x => x.ticker === ticker && x.market === market);
       if (w && w.report && w.report.id !== prevId){
         clearInterval(iv); delete MB._analyzing[ticker + market];
-        MB.home = h; toast(`${ticker} 분석 완료`);
+        MB.home = h;
+        notifyDone(`${ticker} 분석 완료 → ${w.report.verdict}`, () => showReport(w.report.id));
         if (onDone) onDone();
         else if (MB.view === 'stock') mbNav('stock', null, true);
         else if (MB.view === 'home') mbHome();
@@ -3585,8 +3655,24 @@ async function mbHome(){
   }
 }
 async function mbRunBrief(){
-  try { await api('/api/brief', { method: 'POST' }); toast('브리핑 생성 시작 (몇 분 소요)'); }
-  catch (e) { toast(e.message, 'err'); }
+  try {
+    const before = await api('/api/home').catch(() => null);
+    const prevBriefId = before && before.brief_today;
+    await api('/api/brief', { method: 'POST' });
+    toast('브리핑 생성 시작 (몇 분 소요)');
+    let n = 0;
+    const poll = setInterval(async () => {
+      if (++n > 60){ clearInterval(poll); return; }
+      const d = await api('/api/home').catch(() => null);
+      if (!d) return;
+      if (d.brief_today && d.brief_today !== prevBriefId){
+        clearInterval(poll);
+        MB.home = d;
+        notifyDone('오늘의 브리핑 완료', () => showReport(d.brief_today));
+        if (MB.view === 'home') mbHome();
+      }
+    }, 10000);
+  } catch (e) { toast(e.message, 'err'); }
 }
 function mbDiscoveredSection(disc){
   if (!disc || !disc.length) return '';
@@ -3727,6 +3813,9 @@ async function mbScanAdd(ticker, market, btn){
     let name = ticker;
     try { const s = await api(`/api/stock-info/${encodeURIComponent(ticker)}?market=${market}`); name = s.name || ticker; } catch {}
     await api('/api/watchlist', { method: 'POST', body: JSON.stringify({ ticker, market, name }) }).catch(e => { if (e.message !== 'Already exists') throw e; });
+    const hist = await api(`/api/reports/history/${encodeURIComponent(ticker)}?market=${market}`).catch(() => null);
+    const prevId = hist && hist.points && hist.points.length ? hist.points[hist.points.length - 1].id : null;
+
     await api(`/api/analyze/${ticker}?market=${market}`, { method: 'POST' });
     toast(`${ticker} 추가 + 분석 시작`);
     btn.textContent = '분석중 ✓';
@@ -3735,6 +3824,21 @@ async function mbScanAdd(ticker, market, btn){
       if (MB.view === 'home') mbHome();
       else if (MB.view === 'stock' && MB.stockView === 'list') mbStockList();
     }, 900);
+
+    let n = 0;
+    const poll = setInterval(async () => {
+      if (++n > 60){ clearInterval(poll); return; }
+      const d = await api('/api/home').catch(() => null);
+      if (!d) return;
+      const found = d.watchlist.find(s => s.ticker === ticker && s.market === market);
+      if (found?.report && found.report.id !== prevId){
+        clearInterval(poll);
+        MB.home = d;
+        notifyDone(`${ticker} 분석 완료 → ${found.report.verdict}`, () => showReport(found.report.id));
+        if (MB.view === 'home') mbHome();
+        else if (MB.view === 'stock' && MB.stockView === 'list') mbStockList();
+      }
+    }, 10000);
   } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = '+ 분석'; }
 }
 async function mbLoadSigPerf(){
