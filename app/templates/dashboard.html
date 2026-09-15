@@ -2048,6 +2048,21 @@ async function loadOutlook(force){
   loadScanner(force);
 }
 let _scanPoll = null;
+const SCAN_TONE = { good:'var(--up)', mid:'var(--warn)', warn:'var(--sub)', bad:'var(--accent-strong)' };
+function scanRowHtml(x){
+  return `<div class="wl-row" style="cursor:default">
+    <div class="wl-row-top">
+      <span class="wl-tk">${esc(x.ticker)}</span>${mktChip(x.market)}
+      <span class="grade grade-${x.tone}" style="font-size:9.5px">${esc(x.grade)} ${x.score.toFixed(0)}</span>
+      <span style="font-size:11px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.name)}</span>
+      <span style="flex:1"></span>
+      <button class="btn btn-flat btn-xs" onclick="scanAdd('${esc(x.ticker)}','${x.market}',this)">+ 분석</button>
+    </div>
+    <div class="wl-row-bot" style="font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums">
+      3M <span style="color:${SCAN_TONE[x.tone]}">${fmtPct(x.ret_3m)}</span> · 6M ${fmtPct(x.ret_6m)} · 시장 대비 ${x.rel_strength >= 0 ? '+' : ''}${x.rel_strength} · RSI ${x.rsi}${x.above_ma200 ? ' · 200일선 위' : ''}
+    </div>
+  </div>`;
+}
 async function loadScanner(force){
   const el = document.getElementById('scan-body');
   try {
@@ -2060,20 +2075,12 @@ async function loadScanner(force){
     clearTimeout(_scanPoll);
     document.getElementById('scan-meta').textContent =
       `${d.scanned}/${d.universe}종목 스캔 · ${esc(d.as_of)}${d.updating ? ' · 갱신 중' : ''}`;
-    const tone = { good:'var(--up)', mid:'var(--warn)', warn:'var(--sub)', bad:'var(--accent-strong)' };
-    el.innerHTML = d.top.map(x => `
-      <div class="wl-row" style="cursor:default">
-        <div class="wl-row-top">
-          <span class="wl-tk">${esc(x.ticker)}</span>${mktChip(x.market)}
-          <span class="grade grade-${x.tone}" style="font-size:9.5px">${esc(x.grade)} ${x.score.toFixed(0)}</span>
-          <span style="font-size:11px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.name)}</span>
-          <span style="flex:1"></span>
-          <button class="btn btn-flat btn-xs" onclick="scanAdd('${esc(x.ticker)}','${x.market}',this)">+ 분석</button>
-        </div>
-        <div class="wl-row-bot" style="font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums">
-          3M <span style="color:${tone[x.tone]}">${fmtPct(x.ret_3m)}</span> · 6M ${fmtPct(x.ret_6m)} · 시장 대비 ${x.rel_strength >= 0 ? '+' : ''}${x.rel_strength} · RSI ${x.rsi}${x.above_ma200 ? ' · 200일선 위' : ''}
-        </div>
-      </div>`).join('') || '<div style="padding:12px;color:var(--mute);font-size:12px">유망 종목이 없습니다.</div>';
+    const secHd = (label) => `<div style="padding:9px 12px 4px;font-size:11px;font-weight:700;color:var(--sub);border-top:1px solid var(--line)">${label}</div>`;
+    el.innerHTML =
+      `<div style="padding:9px 12px 4px;font-size:11px;font-weight:700;color:var(--sub)">📡 개별 종목 (S&amp;P 500 + KOSPI 대형주)</div>` +
+      (d.top.map(scanRowHtml).join('') || '<div style="padding:12px;color:var(--mute);font-size:12px">유망 종목이 없습니다.</div>') +
+      secHd('🏛 섹터 지수 ETF (S&amp;P 500 섹터 11종)') +
+      ((d.sector_etfs || []).map(scanRowHtml).join('') || '<div style="padding:12px;color:var(--mute);font-size:12px">유망 섹터가 없습니다.</div>');
   } catch(e){ el.innerHTML = `<div style="padding:10px 12px;font-size:12px;color:var(--up)">실패: ${esc(e.message)}</div>`; }
 }
 async function scanAdd(ticker, market, btn){
@@ -3781,6 +3788,18 @@ async function mbStockList(){
   }
 }
 let _mbScanPoll = null;
+function mbScanRowHtml(x, isLast){
+  return `<div style="display:flex;align-items:center;gap:10px;padding:11px 14px${isLast ? '' : ';border-bottom:1px solid var(--line)'}">
+    <div style="flex:1;min-width:0">
+      <div style="display:flex;align-items:center;gap:5px">
+        <span style="font-size:14.5px;font-weight:600">${esc(x.ticker)}</span>
+        <span class="grade grade-${x.tone}" style="font-size:9px">${esc(x.grade)} ${x.score.toFixed(0)}</span>
+      </div>
+      <div style="font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums;margin-top:1px">${esc(x.name)} · 3M ${fmtPct(x.ret_3m)} · 시장 대비 ${x.rel_strength >= 0 ? '+' : ''}${x.rel_strength}</div>
+    </div>
+    <button class="m-filter" style="height:30px;background:var(--accent);color:#fff" onclick="mbScanAdd('${esc(x.ticker)}','${x.market}',this)">+ 분석</button>
+  </div>`;
+}
 async function mbLoadScanner(){
   const box = document.getElementById('m-scan');
   if (!box) return;
@@ -3794,17 +3813,13 @@ async function mbLoadScanner(){
     clearTimeout(_mbScanPoll);
     const mt = document.getElementById('m-scan-meta');
     if (mt) mt.textContent = `${d.scanned}종목`;
-    box.innerHTML = d.top.slice(0, 12).map((x, i, a) => `
-      <div style="display:flex;align-items:center;gap:10px;padding:11px 14px${i < a.length - 1 ? ';border-bottom:1px solid var(--line)' : ''}">
-        <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:center;gap:5px">
-            <span style="font-size:14.5px;font-weight:600">${esc(x.ticker)}</span>
-            <span class="grade grade-${x.tone}" style="font-size:9px">${esc(x.grade)} ${x.score.toFixed(0)}</span>
-          </div>
-          <div style="font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums;margin-top:1px">${x.market} · 3M ${fmtPct(x.ret_3m)} · 시장 대비 ${x.rel_strength >= 0 ? '+' : ''}${x.rel_strength}</div>
-        </div>
-        <button class="m-filter" style="height:30px;background:var(--accent);color:#fff" onclick="mbScanAdd('${esc(x.ticker)}','${x.market}',this)">+ 분석</button>
-      </div>`).join('') || '<div style="padding:16px;text-align:center;color:var(--mute);font-size:12.5px">유망 종목 없음</div>';
+    const stocks = d.top.slice(0, 10);
+    const sectors = (d.sector_etfs || []).slice(0, 11);
+    box.innerHTML =
+      `<div style="padding:9px 14px 4px;font-size:11px;font-weight:700;color:var(--sub)">📡 개별 종목</div>` +
+      (stocks.map((x, i) => mbScanRowHtml(x, i === stocks.length - 1)).join('') || '<div style="padding:14px;text-align:center;color:var(--mute);font-size:12.5px">유망 종목 없음</div>') +
+      `<div style="padding:9px 14px 4px;font-size:11px;font-weight:700;color:var(--sub);border-top:1px solid var(--line)">🏛 섹터 지수 ETF (S&amp;P 500)</div>` +
+      (sectors.map((x, i) => mbScanRowHtml(x, i === sectors.length - 1)).join('') || '<div style="padding:14px;text-align:center;color:var(--mute);font-size:12.5px">유망 섹터 없음</div>');
   } catch { box.innerHTML = ''; }
 }
 async function mbScanAdd(ticker, market, btn){

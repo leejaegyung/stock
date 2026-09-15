@@ -57,7 +57,9 @@ app/core/chart_patterns.py       — 차트 패턴 인식 순수 함수 (Layer 1
                                    analyze_stock_algo 에서 기술점수 가감 + bull/bear 신호로 반영
 app/core/universe.py             — 스캐너 종목 유니버스 (Layer 1, 순수 데이터): S&P 500 + KOSPI
                                    대형주 목록. /api/scanner 가 모멘텀·상대강도로 랭킹 (KST 06:40 갱신).
-                                   스케줄러가 상위 유망 종목(관심목록 밖)을 자동 정식 분석 →
+                                   같은 알고리즘을 S&P500 섹터 지수 ETF(SPDR 11종, _SECTOR_ETFS)에도
+                                   적용해 "개별 종목" / "섹터 ETF" 두 목록으로 분리 반환(sector_etfs 필드).
+                                   스케줄러가 상위 유망 개별 종목(관심목록 밖)을 자동 정식 분석 →
                                    AnalysisReport.source='discovered' (UI에서 관심종목과 태두리 구분)
 app/core/quant.py                — 포트폴리오 계량 분석 순수 함수 (Layer 1): 변동성·샤프·소르티노·
                                    MDD·VaR·베타·상관·분산비율·비중 최적화(동일/역변동성/리스크패리티/

@@ -2295,6 +2295,8 @@ def _kr_name(code: str) -> str:
 
 
 def _compute_scan(top_n: int = 18) -> dict:
+    """개별 종목(S&P500+KOSPI 대형주)과 S&P500 섹터 지수 ETF(SPDR 11종)를
+    같은 모멘텀·상대강도 알고리즘으로 각각 랭킹해 따로 반환한다."""
     import yfinance as yf
 
     from app.core import market_scan as ms
@@ -2304,7 +2306,8 @@ def _compute_scan(top_n: int = 18) -> dict:
         held = {(w.ticker, w.market) for w in session.query(Watchlist).all()}
 
     cands = exclude_held(universe(), held)
-    yf_syms = ["SPY"] + [t if m == "US" else f"{t}.KS" for (t, m) in cands]
+    sector_cands = [t for t in _SECTOR_ETFS if (t, "US") not in held]
+    yf_syms = ["SPY"] + [t if m == "US" else f"{t}.KS" for (t, m) in cands] + sector_cands
 
     price: dict[str, list[float]] = {}
 
@@ -2359,12 +2362,32 @@ def _compute_scan(top_n: int = 18) -> dict:
         if x["market"] == "KR":
             x["name"] = _kr_name(x["ticker"])
 
+    # S&P500 섹터 지수 ETF (SPDR 11종) — 같은 알고리즘, 개별 종목과 분리해서 랭킹
+    sector_scored = []
+    for t in sector_cands:
+        c = price.get(t)
+        if not c:
+            continue
+        mp = ms.momentum_profile(c)
+        rs = ms.relative_strength(c, spy)
+        score = ms.trend_score(mp, rs)
+        grade, tone = ms.score_label(score)
+        sector_scored.append({
+            "ticker": t, "market": "US", "name": f"{_SECTOR_ETFS[t]} ({t})",
+            "score": score, "grade": grade, "tone": tone,
+            "price": mp["price"], "rsi": mp.get("rsi") or 50,
+            "ret_1m": mp["ret_1m"], "ret_3m": mp["ret_3m"], "ret_6m": mp["ret_6m"],
+            "rel_strength": rs, "above_ma200": mp["above_ma200"],
+        })
+    sector_scored.sort(key=lambda x: (x["score"], x["rel_strength"]), reverse=True)
+
     return {
         "ok": True,
         "as_of": date.today().isoformat(),
         "scanned": len(scored),
         "universe": len(cands),
         "top": top,
+        "sector_etfs": sector_scored,
     }
 
 
