@@ -26,6 +26,8 @@ from app.db.models import (
     LedgerTransaction,
     NetWorthSnapshot,
     NewsItem,
+    PaperAccount,
+    PaperTrade,
     RecurringTransaction,
     UserApiKey,
     Watchlist,
@@ -2435,6 +2437,233 @@ async def market_scanner(refresh: bool = False) -> dict:
         return out
     return {"ok": False, "building": True, "updating": _scan_running,
             "reason": "스캔을 처음 실행 중입니다. 30초쯤 뒤 새로고침해 주세요."}
+
+
+# ── 모의투자 (실제 자금 없음 — 알고리즘 워크플로우 학습용) ──────────────────────
+#
+# 실제 브로커 계좌·실제 주문과는 완전히 분리된 가상 시뮬레이션이다.
+# 관심종목의 최신 리포트가 "매수/추가매수" 결론일 때 trade_plan(진입가·목표가·손절가)을
+# 그대로 따라 가상 체결하고, should_exit() 규칙으로 청산해 승률·손익을 기록한다.
+# 이 기록은 신호 적중률·확신도 모델을 검증·개선하는 데 쓰인다. 실제 주문은 절대 제출하지 않는다.
+
+_PAPER_ENTRY_VERDICTS = ("매수", "추가매수")
+_PAPER_MAX_HOLD_DAYS = 90
+
+
+def _get_or_create_paper_account(session) -> PaperAccount:
+    acct = session.query(PaperAccount).first()
+    if acct is None:
+        acct = PaperAccount()
+        session.add(acct)
+        session.commit()
+        session.refresh(acct)
+    return acct
+
+
+def _run_paper_trading() -> dict:
+    """모의투자 시뮬레이션 1회 실행 — (1) 보유 중인 가상 포지션 청산 판정 → (2) 신규 진입.
+
+    실제 자금·실제 주문은 전혀 사용하지 않는다. 전량 DB 상의 가상 계좌/거래 기록일 뿐이다.
+    """
+    from datetime import datetime, timezone
+
+    from app.core.paper_trading import compute_pnl, position_size, should_exit
+
+    today = date.today().isoformat()
+    usd_krw = _macro_cache.get("data", {}).get("usd_krw", {}).get("price") or 1380.0
+    opened: list[dict] = []
+    closed: list[dict] = []
+
+    with _session() as session:
+        acct = _get_or_create_paper_account(session)
+
+        # ── 1) 청산 판정 ──
+        open_trades = session.query(PaperTrade).filter_by(status="open").all()
+        if open_trades:
+            items = [(t.ticker, t.market) for t in open_trades]
+            px = _batch_prices(items)
+            for t in open_trades:
+                sym = t.ticker if t.market == "US" else f"{t.ticker}.KS"
+                lp = px.get(sym)
+                if lp is None:
+                    continue
+                price_raw = lp["last"]
+
+                latest = (
+                    session.query(AnalysisReport)
+                    .filter_by(ticker=t.ticker, market=t.market)
+                    .order_by(AnalysisReport.id.desc())
+                    .first()
+                )
+                verdict = latest.verdict if latest else None
+                days_held = (date.today() - date.fromisoformat(t.entry_date)).days
+
+                hit = should_exit(
+                    entry_price=t.entry_price, target1=t.target1, target2=t.target2,
+                    stop=t.stop, current_price=price_raw, verdict=verdict,
+                    days_held=days_held, max_hold_days=_PAPER_MAX_HOLD_DAYS,
+                )
+                if not hit:
+                    continue
+
+                price_krw = round(price_raw * usd_krw) if t.market == "US" else round(price_raw)
+                pnl = compute_pnl(t.entry_price_krw, price_krw, t.quantity)
+                t.exit_date = today
+                t.exit_price = price_raw
+                t.exit_price_krw = price_krw
+                t.exit_reason = hit["reason"]
+                t.pnl_krw = pnl["pnl_krw"]
+                t.pnl_pct = pnl["pnl_pct"]
+                t.status = "closed"
+                t.updated_at = datetime.now(timezone.utc)
+                # 매도 대금(원금 + 손익) 회수
+                acct.cash_krw += t.entry_price_krw * t.quantity + pnl["pnl_krw"]
+                closed.append({
+                    "ticker": t.ticker, "market": t.market, "reason": hit["reason"],
+                    "pnl_pct": pnl["pnl_pct"], "pnl_krw": pnl["pnl_krw"],
+                })
+            session.commit()
+
+        # ── 2) 신규 진입 (관심종목 중 매수/추가매수 결론 + 미보유 포지션) ──
+        open_tickers = {
+            (t.ticker, t.market)
+            for t in session.query(PaperTrade).filter_by(status="open").all()
+        }
+        for w in session.query(Watchlist).all():
+            if (w.ticker, w.market) in open_tickers:
+                continue
+            latest = (
+                session.query(AnalysisReport)
+                .filter_by(ticker=w.ticker, market=w.market)
+                .order_by(AnalysisReport.id.desc())
+                .first()
+            )
+            if latest is None or latest.verdict not in _PAPER_ENTRY_VERDICTS:
+                continue
+
+            m = _row_metrics(latest)
+            tp = m.get("trade_plan") or {}
+            price_raw = tp.get("price")
+            if not price_raw:
+                continue
+            kelly_pct = (m.get("half_kelly") or 0) * 100  # half_kelly 는 0~1 소수 → % 로 환산
+            price_krw = round(price_raw * usd_krw) if w.market == "US" else round(price_raw)
+
+            sized = position_size(acct.cash_krw, kelly_pct, price_krw)
+            if sized["qty"] <= 0:
+                continue
+
+            session.add(PaperTrade(
+                ticker=w.ticker, market=w.market, quantity=sized["qty"],
+                entry_date=today, entry_price=price_raw, entry_price_krw=price_krw,
+                entry_report_id=latest.id, entry_verdict=latest.verdict,
+                entry_confidence_score=m.get("confidence_score"),
+                entry_confidence_grade=m.get("confidence_grade"),
+                target1=tp.get("target1"), target2=tp.get("target2"), stop=tp.get("stop"),
+                status="open",
+            ))
+            acct.cash_krw -= sized["budget_krw"]
+            opened.append({
+                "ticker": w.ticker, "market": w.market, "qty": sized["qty"],
+                "budget_krw": sized["budget_krw"], "verdict": latest.verdict,
+            })
+
+        acct.updated_at = datetime.now(timezone.utc)
+        session.commit()
+
+    logger.info("paper trading run: opened=%d closed=%d", len(opened), len(closed))
+    return {"ran_at": today, "opened": opened, "closed": closed}
+
+
+@app.get("/api/paper/status")
+async def paper_status() -> dict:
+    """모의투자 계좌 현황: 현금·평가금액·수익률 + 보유 포지션(평가손익 포함) + 최근 거래 이력."""
+    from app.core.paper_trading import EXIT_REASON_LABEL, summarize_trades
+
+    usd_krw = _macro_cache.get("data", {}).get("usd_krw", {}).get("price") or 1380.0
+
+    with _session() as session:
+        acct = _get_or_create_paper_account(session)
+        open_trades = session.query(PaperTrade).filter_by(status="open").order_by(PaperTrade.id.desc()).all()
+        closed_trades = (
+            session.query(PaperTrade).filter_by(status="closed")
+            .order_by(PaperTrade.id.desc()).limit(30).all()
+        )
+
+        positions = []
+        positions_value = 0
+        if open_trades:
+            px = _batch_prices([(t.ticker, t.market) for t in open_trades])
+            for t in open_trades:
+                sym = t.ticker if t.market == "US" else f"{t.ticker}.KS"
+                lp = px.get(sym)
+                cur_raw = lp["last"] if lp else t.entry_price
+                cur_krw = round(cur_raw * usd_krw) if t.market == "US" else round(cur_raw)
+                value_krw = round(cur_krw * t.quantity)
+                cost_krw = round(t.entry_price_krw * t.quantity)
+                positions_value += value_krw
+                positions.append({
+                    "ticker": t.ticker, "market": t.market, "quantity": t.quantity,
+                    "currency": "USD" if t.market == "US" else "KRW",
+                    "entry_date": t.entry_date, "entry_price": t.entry_price, "entry_price_krw": t.entry_price_krw,
+                    "current_price": cur_raw, "current_price_krw": cur_krw,
+                    "value_krw": value_krw, "cost_krw": cost_krw,
+                    "unrealized_pnl_krw": value_krw - cost_krw,
+                    "unrealized_pnl_pct": round((value_krw / cost_krw - 1) * 100, 2) if cost_krw else None,
+                    "entry_verdict": t.entry_verdict, "entry_confidence_grade": t.entry_confidence_grade,
+                    # target1/target2/stop 은 entry_price 와 같은 현지통화 단위 (entry_price_krw 아님)
+                    "target1": t.target1, "target2": t.target2, "stop": t.stop,
+                })
+
+        trades_out = [{
+            "id": t.id, "ticker": t.ticker, "market": t.market, "quantity": t.quantity,
+            "currency": "USD" if t.market == "US" else "KRW",
+            "entry_date": t.entry_date, "entry_price": t.entry_price, "entry_price_krw": t.entry_price_krw,
+            "exit_date": t.exit_date, "exit_price": t.exit_price, "exit_price_krw": t.exit_price_krw,
+            "exit_reason": t.exit_reason, "exit_reason_label": EXIT_REASON_LABEL.get(t.exit_reason, t.exit_reason),
+            "pnl_krw": t.pnl_krw, "pnl_pct": t.pnl_pct,
+            "entry_verdict": t.entry_verdict,
+        } for t in closed_trades]
+
+        stats = summarize_trades([{"pnl_pct": t.pnl_pct, "pnl_krw": t.pnl_krw} for t in closed_trades])
+        equity = round(acct.cash_krw + positions_value)
+        total_return_pct = (
+            round((equity / acct.initial_cash_krw - 1) * 100, 2) if acct.initial_cash_krw else None
+        )
+
+        return {
+            "cash_krw": round(acct.cash_krw),
+            "initial_cash_krw": acct.initial_cash_krw,
+            "positions_value_krw": positions_value,
+            "equity_krw": equity,
+            "total_return_pct": total_return_pct,
+            "positions": positions,
+            "recent_trades": trades_out,
+            "stats": stats,
+            "disclaimer": "실제 자금·실제 계좌와 무관한 가상 시뮬레이션입니다.",
+        }
+
+
+@app.post("/api/paper/run")
+async def paper_run(background_tasks: BackgroundTasks) -> dict:
+    """모의투자 시뮬레이션 수동 실행 (백그라운드) — 청산 판정 → 신규 진입."""
+    background_tasks.add_task(_run_paper_trading)
+    return {"status": "queued"}
+
+
+@app.post("/api/paper/reset")
+async def paper_reset(initial_cash_krw: float = 10_000_000.0) -> dict:
+    """모의투자 계좌·거래 이력 초기화 (가상 시드머니 리셋). 실제 자금과 무관."""
+    with _session() as session:
+        session.query(PaperTrade).delete()
+        acct = session.query(PaperAccount).first()
+        if acct:
+            acct.cash_krw = initial_cash_krw
+            acct.initial_cash_krw = initial_cash_krw
+        else:
+            session.add(PaperAccount(cash_krw=initial_cash_krw, initial_cash_krw=initial_cash_krw))
+        session.commit()
+    return {"status": "reset", "initial_cash_krw": initial_cash_krw}
 
 
 # ── API 키 설정 ────────────────────────────────────────────────────────────────

@@ -64,7 +64,12 @@ app/core/universe.py             — 스캐너 종목 유니버스 (Layer 1, 순
 app/core/quant.py                — 포트폴리오 계량 분석 순수 함수 (Layer 1): 변동성·샤프·소르티노·
                                    MDD·VaR·베타·상관·분산비율·비중 최적화(동일/역변동성/리스크패리티/
                                    최소분산)·리밸런싱 백테스트. gs-quant timeseries 스타일, 외부 API 없음
-app/db/models.py                 — Watchlist, AnalysisReport, NewsItem
+app/core/paper_trading.py        — 모의투자(가상 매매) 순수 함수 (Layer 1): 켈리 비중 기반 포지션 크기·
+                                   청산 트리거(손절>2차목표>1차목표>결론반전>보유기간초과)·손익·승률 집계.
+                                   실제 자금 없음 — 관심종목의 매수/추가매수 결론 + trade_plan 을 그대로
+                                   따라간 가상 체결을 PaperAccount/PaperTrade 에 기록해 신호 적중률 검증에 사용.
+                                   /api/paper/status·run·reset, 스케줄러 KST 11:00 자동 실행(브리핑 이후)
+app/db/models.py                 — Watchlist, AnalysisReport, NewsItem, PaperAccount, PaperTrade(모의투자)
 app/db/client.py                 — SQLite + WAL 모드
 app/core/datasources/us.py       — yfinance 데이터소스 (US)
 app/core/datasources/kr.py       — pykrx + stub (KR, Phase 2에서 실연결)

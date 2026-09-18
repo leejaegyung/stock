@@ -438,6 +438,23 @@ def _discover_and_analyze(top: list) -> None:
         session.commit()
 
 
+def _paper_trade_job() -> None:
+    """모의투자(가상 매매) 1일 1회 실행 — 실제 자금·실제 주문과 무관.
+
+    아침 브리핑(10:30)으로 그날 리포트 결론이 갱신된 뒤에 돌아야 최신 신호를 반영한다.
+    """
+    try:
+        from app.entrypoints.web import _run_paper_trading
+
+        result = _run_paper_trading()
+        logger.info(
+            "paper trading job: opened=%d closed=%d",
+            len(result.get("opened", [])), len(result.get("closed", [])),
+        )
+    except Exception as e:
+        logger.warning("paper_trade job failed: %s", e)
+
+
 def _translate_news_job() -> None:
     """번역 안 된 외신 뉴스를 한국어로 채운다 (LLM 미사용, 자체 번역 워크플로우).
 
@@ -523,9 +540,20 @@ def start_scheduler() -> BackgroundScheduler:
         coalesce=True,
     )
 
+    # 모의투자: KST 11:00 매일 (아침 브리핑 이후 — 그날 갱신된 결론 반영). 실제 자금 없음.
+    _scheduler.add_job(
+        _paper_trade_job,
+        trigger=CronTrigger(hour=11, minute=0, timezone=KST),
+        id="paper_trade_sim",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     _scheduler.start()
     logger.info(
-        "Scheduler started. Brief: KST 10:30 | Watcher: KST 12:00, 18:00 | Cleanup: KST 03:00 | Scan: KST 06:40",
+        "Scheduler started. Brief: KST 10:30 | Watcher: KST 12:00, 18:00 | "
+        "Cleanup: KST 03:00 | Scan: KST 06:40 | Paper trade: KST 11:00",
     )
     return _scheduler
 

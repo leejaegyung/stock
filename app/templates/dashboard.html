@@ -929,6 +929,22 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
       <div style="font-size:12px;color:var(--sub);line-height:1.6">보유 종목을 <b>똑같이 / 위험 균등하게 / 출렁임 최소로</b> 나눠 담았을 때, 지난 1년 성과가 어떻게 달랐을지 시장(S&amp;P 500)과 비교합니다.</div>
     </div>
   </div>
+
+  <!-- 자동 매매 (모의투자) -->
+  <div class="box" id="paper-box">
+    <div class="box-head">
+      <span class="box-title">🤖 자동 매매 (모의투자)</span>
+      <span class="box-sub" style="flex:1" id="paper-meta">관심종목의 매수·추가매수 신호를 따라가는 가상 매매</span>
+      <button class="btn btn-link" onclick="loadPaperTrading()">새로고침</button>
+      <button class="btn btn-primary btn-sm" id="paper-run" onclick="runPaperTrade()">지금 실행</button>
+    </div>
+    <div style="padding:8px 12px;font-size:11px;color:var(--mute);background:var(--panel2,rgba(127,127,127,.06));border-bottom:1px solid var(--line);line-height:1.5">
+      ⚠ <b>실제 자금이 전혀 오가지 않는 가상 시뮬레이션</b>입니다. 실제 증권 계좌·실제 주문과는 무관하며, 우리 알고리즘의 매매 판단이 실전에서 어땠을지 데이터로 검증하기 위한 학습용 기능입니다.
+    </div>
+    <div id="paper-body" class="box-body">
+      <div style="font-size:12px;color:var(--mute)"><span class="spin"></span> 모의투자 현황 불러오는 중…</div>
+    </div>
+  </div>
 </div>
 
 <!-- ── API 설정 ── -->
@@ -2586,7 +2602,7 @@ async function loadFinance(){
   api('/api/macro').then(m => { _lastMacro = m; renderFinanceRisks(); }).catch(()=>{});
   loadNetworthTrend();
   loadAnalytics();
-  await Promise.all([loadSummary(), loadTxList(), loadAssets(), loadPortfolio(), loadRecurring()]);
+  await Promise.all([loadSummary(), loadTxList(), loadAssets(), loadPortfolio(), loadRecurring(), loadPaperTrading()]);
 }
 async function loadNetworthTrend(){
   const el = document.getElementById('fin-spark');
@@ -3035,6 +3051,115 @@ function renderBacktest(d){
   <div class="pa-hint" style="margin-top:6px">과거 1년 수익률로 계산한 가상 시뮬레이션입니다. <b>미래 수익을 보장하지 않으며</b>, 실제로는 매매 비용·세금이 추가로 듭니다.</div>`;
   document.getElementById('bt-body').innerHTML =
     `<div class="pa-hint" style="margin-bottom:8px">⏱️ <b>1년 전에 이 방식대로 나눠서 투자하고, ${d.rebalance_days}일마다 비중을 맞췄다면</b> 평가금액이 어떻게 움직였을지 비교합니다. (시작점 = 1.0)</div>` + svg + tbl;
+}
+
+const EXIT_REASON_KO = { stop:'손절', target1:'1차 목표', target2:'2차 목표', verdict_sell:'결론 매도 전환', timeout:'보유기간 초과', manual:'수동 청산' };
+async function loadPaperTrading(){
+  const el = document.getElementById('paper-body');
+  try {
+    const d = await api('/api/paper/status');
+    renderPaperTrading(d);
+  } catch(e){
+    el.innerHTML = `<div class="empty" style="color:var(--up)">불러오기 실패: ${esc(e.message)}</div>`;
+  }
+}
+function renderPaperTrading(d){
+  const el = document.getElementById('paper-body');
+  const retCls = (d.total_return_pct || 0) >= 0 ? 'pos' : 'neg';
+  const s = d.stats || {};
+  document.getElementById('paper-meta').textContent =
+    `가상 시드 ${krw(d.initial_cash_krw)} 로 시작 · 관심종목 매수·추가매수 신호를 자동으로 따라간 결과`;
+
+  let posHtml = `<div class="empty" style="padding:12px 0"><div class="empty-icon">—</div>보유 중인 가상 포지션이 없습니다.</div>`;
+  if (d.positions && d.positions.length){
+    posHtml = `<div class="tbl-scroll"><table class="data-table" style="min-width:560px">
+      <thead><tr><th>종목</th><th class="num">수량</th><th class="num">진입가</th><th class="num">현재가</th><th>수익률</th><th class="num">목표·손절</th></tr></thead>
+      <tbody>${d.positions.map(p => {
+        const cls = (p.unrealized_pnl_krw || 0) >= 0 ? 'pos' : 'neg';
+        const cur = p.currency === 'USD' ? `$${(p.entry_price||0).toFixed(2)} → $${(p.current_price||0).toFixed(2)}` : `₩${Math.round(p.entry_price).toLocaleString('ko-KR')} → ₩${Math.round(p.current_price).toLocaleString('ko-KR')}`;
+        const tgtStop = [
+          p.target1 != null ? `목표1 ${p.currency==='USD'?'$':'₩'}${p.target1.toLocaleString('ko-KR')}` : '',
+          p.target2 != null ? `목표2 ${p.currency==='USD'?'$':'₩'}${p.target2.toLocaleString('ko-KR')}` : '',
+          p.stop != null ? `손절 ${p.currency==='USD'?'$':'₩'}${p.stop.toLocaleString('ko-KR')}` : '',
+        ].filter(Boolean).join(' · ') || '—';
+        return `<tr>
+          <td><div style="font-weight:600">${esc(p.ticker)} ${mktChip(p.market)}</div><div style="color:var(--sub);font-size:11px">${p.entry_date} 진입 · ${verdictChip(p.entry_verdict)}</div></td>
+          <td class="num">${Number(p.quantity).toLocaleString()}</td>
+          <td class="num" style="font-size:11px;color:var(--sub)">${cur}</td>
+          <td class="num" style="font-weight:500">${krw(p.current_price_krw)}</td>
+          <td><span class="${cls}">${p.unrealized_pnl_pct != null ? (p.unrealized_pnl_pct >= 0 ? '+' : '') + p.unrealized_pnl_pct.toFixed(2) + '%' : '—'}</span>
+            <div style="font-size:10px;color:var(--mute)">${p.unrealized_pnl_krw != null ? (p.unrealized_pnl_krw >= 0 ? '+' : '') + krw(Math.abs(p.unrealized_pnl_krw)) : ''}</div></td>
+          <td class="num" style="font-size:10.5px;color:var(--mute)">${esc(tgtStop)}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
+  }
+
+  let tradesHtml = `<div class="empty" style="padding:12px 0"><div class="empty-icon">—</div>아직 청산된 거래가 없습니다.</div>`;
+  if (d.recent_trades && d.recent_trades.length){
+    tradesHtml = `<div class="tbl-scroll"><table class="data-table" style="min-width:520px">
+      <thead><tr><th>종목</th><th>기간</th><th>청산 사유</th><th>손익</th></tr></thead>
+      <tbody>${d.recent_trades.map(t => {
+        const cls = (t.pnl_krw || 0) >= 0 ? 'pos' : 'neg';
+        return `<tr>
+          <td><div style="font-weight:600">${esc(t.ticker)} ${mktChip(t.market)}</div></td>
+          <td style="font-size:11px;color:var(--sub)">${t.entry_date} → ${t.exit_date}</td>
+          <td style="font-size:11px">${esc(t.exit_reason_label || EXIT_REASON_KO[t.exit_reason] || t.exit_reason || '—')}</td>
+          <td><span class="${cls}">${t.pnl_pct != null ? (t.pnl_pct >= 0 ? '+' : '') + t.pnl_pct.toFixed(2) + '%' : '—'}</span>
+            <div style="font-size:10px;color:var(--mute)">${t.pnl_krw != null ? (t.pnl_krw >= 0 ? '+' : '') + krw(Math.abs(t.pnl_krw)) : ''}</div></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
+  }
+
+  el.innerHTML = `
+    <div class="kpi-strip" style="margin-bottom:10px">
+      <div class="kpi-cell"><div class="k">가상 평가금액</div><div class="v">${krw(d.equity_krw)}</div>
+        <div class="s ${retCls}">${d.total_return_pct != null ? (d.total_return_pct >= 0 ? '+' : '') + d.total_return_pct.toFixed(2) + '%' : '—'}</div></div>
+      <div class="kpi-cell"><div class="k">가상 현금</div><div class="v">${krw(d.cash_krw)}</div>
+        <div class="s">보유 포지션 ${krw(d.positions_value_krw)}</div></div>
+      <div class="kpi-cell"><div class="k">청산 거래 승률</div><div class="v">${s.win_rate != null ? Math.round(s.win_rate * 100) + '%' : '—'}</div>
+        <div class="s">${s.count || 0}건 · 평균 ${s.avg_pnl_pct != null ? (s.avg_pnl_pct >= 0 ? '+' : '') + s.avg_pnl_pct.toFixed(2) + '%' : '—'}</div></div>
+    </div>
+    <div class="box-title" style="font-size:12.5px;margin:4px 0 6px">보유 중인 가상 포지션</div>
+    ${posHtml}
+    <div class="box-title" style="font-size:12.5px;margin:14px 0 6px">최근 청산 거래</div>
+    ${tradesHtml}
+    <div style="text-align:right;margin-top:8px">
+      <button class="btn btn-link" style="color:var(--mute);font-size:11px" onclick="resetPaperTrading()">계좌 초기화</button>
+    </div>`;
+}
+async function runPaperTrade(){
+  const btn = document.getElementById('paper-run');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  const before = JSON.stringify((await api('/api/paper/status').catch(()=>null)) || {});
+  try {
+    await api('/api/paper/run', { method:'POST' });
+    let tries = 0;
+    const poll = setInterval(async () => {
+      tries++;
+      const d = await api('/api/paper/status').catch(()=>null);
+      if (d) renderPaperTrading(d);
+      if (d && JSON.stringify(d) !== before){
+        clearInterval(poll);
+        btn.disabled = false; btn.textContent = '지금 실행';
+        notifyDone('모의투자 실행 완료', () => nav('finance', document.querySelector('[data-panel="finance"]')));
+      } else if (tries >= 15){
+        clearInterval(poll);
+        btn.disabled = false; btn.textContent = '지금 실행';
+      }
+    }, 2000);
+  } catch(e){
+    btn.disabled = false; btn.textContent = '지금 실행';
+    alert('실행 실패: ' + e.message);
+  }
+}
+async function resetPaperTrading(){
+  if (!confirm('모의투자 계좌를 초기화할까요? 보유 포지션·거래 이력이 모두 사라지고 가상 시드머니로 다시 시작합니다.')) return;
+  try {
+    await api('/api/paper/reset', { method:'POST' });
+    loadPaperTrading();
+  } catch(e){ alert('초기화 실패: ' + e.message); }
 }
 
 let _finAssets = [], _finSummary = null;
@@ -4098,6 +4223,8 @@ async function mbAssets(){
       </div></div>` : ''}
       <div class="m-sec"><b>주식 포지션</b><a style="color:${mbCol(stockPct)};cursor:default">${mbPct(stockPct)}</a></div>
       <div class="m-pad"><div class="m-card" style="overflow:hidden">${posRows || '<div style="padding:24px;text-align:center;color:var(--mute);font-size:13px">보유 종목이 없습니다</div>'}</div></div>
+      <div class="m-sec"><b>🤖 자동 매매 (모의투자)</b><a onclick="mbRunPaperTrade()" style="color:var(--accent)">지금 실행</a></div>
+      <div class="m-pad"><div class="m-card" id="m-paper" style="overflow:hidden"><div class="m-skel" style="height:56px;margin:12px"></div></div></div>
       ${held.length >= 2 ? `<div class="m-sec"><b>리밸런싱 제안</b>
         <select id="m-rb-scheme" onchange="mbLoadRebalance()" style="width:auto;height:28px;font-size:12px">
           <option value="risk_parity">리스크 패리티</option><option value="equal">동일 비중</option>
@@ -4108,10 +4235,55 @@ async function mbAssets(){
       <div class="m-pad"><div class="m-card" id="m-tx" style="overflow:hidden"><div class="m-skel" style="height:56px;margin:12px"></div></div></div>`;
 
     mbLoadTx();
+    mbLoadPaperTrading();
     if (held.length >= 2) mbLoadRebalance();
   } catch (e) {
     el.innerHTML = `<div class="m-pad"><div class="m-card" style="padding:20px;color:var(--up);font-size:13px">오류: ${esc(e.message)}</div></div>`;
   }
+}
+async function mbLoadPaperTrading(){
+  const box = document.getElementById('m-paper');
+  if (!box) return;
+  try {
+    const d = await api('/api/paper/status');
+    mbRenderPaperTrading(d);
+  } catch (e) { box.innerHTML = `<div style="padding:16px;font-size:12.5px;color:var(--up)">불러오기 실패</div>`; }
+}
+function mbRenderPaperTrading(d){
+  const box = document.getElementById('m-paper');
+  if (!box) return;
+  const s = d.stats || {};
+  const posN = (d.positions || []).length;
+  const posRows = (d.positions || []).slice(0, 5).map((p, i, a) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:11px 14px${i < a.length - 1 ? ';border-bottom:1px solid var(--line)' : ''}">
+      <div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600">${esc(p.ticker)}</div><div style="font-size:11px;color:var(--mute)">${esc(p.entry_date)} 진입 · ${p.quantity}주</div></div>
+      <div style="text-align:right"><div style="font-size:13px;font-weight:700;color:${mbCol(p.unrealized_pnl_pct)}">${mbPct(p.unrealized_pnl_pct)}</div><div style="font-size:11px;color:var(--mute)">${krw(p.current_price_krw)}</div></div>
+    </div>`).join('');
+  const tradeRows = (d.recent_trades || []).slice(0, 5).map((t, i, a) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:11px 14px${i < a.length - 1 ? ';border-bottom:1px solid var(--line)' : ''}">
+      <div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600">${esc(t.ticker)}</div><div style="font-size:11px;color:var(--mute)">${esc(t.exit_reason_label || t.exit_reason || '')}</div></div>
+      <div style="font-size:13px;font-weight:700;color:${mbCol(t.pnl_pct)}">${mbPct(t.pnl_pct)}</div>
+    </div>`).join('');
+  box.innerHTML = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-size:12px;color:var(--mute)">가상 평가금액</span>
+        <span style="font-size:11px;font-weight:600;color:${mbCol(d.total_return_pct)}">${d.total_return_pct != null ? (d.total_return_pct >= 0 ? '+' : '') + d.total_return_pct.toFixed(2) + '%' : '—'}</span>
+      </div>
+      <div style="font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px">${krw(d.equity_krw)}</div>
+      <div style="font-size:11px;color:var(--mute);margin-top:3px">보유 ${posN}종목 · 청산 ${s.count || 0}건 · 승률 ${s.win_rate != null ? Math.round(s.win_rate * 100) + '%' : '—'}</div>
+    </div>
+    ${posRows || '<div style="padding:18px;text-align:center;color:var(--mute);font-size:12.5px">보유 중인 가상 포지션이 없습니다</div>'}
+    ${tradeRows ? `<div style="padding:8px 14px 0;font-size:11px;color:var(--mute)">최근 청산 거래</div>${tradeRows}` : ''}
+    <div style="padding:9px 14px;font-size:10.5px;color:var(--mute);border-top:1px solid var(--line)">⚠ 실제 자금 없는 가상 시뮬레이션입니다</div>`;
+}
+async function mbRunPaperTrade(){
+  const box = document.getElementById('m-paper');
+  if (box) box.innerHTML = `<div style="padding:16px;font-size:12.5px;color:var(--mute)"><span class="spin"></span> 실행 중…</div>`;
+  try {
+    await api('/api/paper/run', { method: 'POST' });
+    setTimeout(() => { mbLoadPaperTrading(); notifyDone('모의투자 실행 완료'); }, 7000);
+  } catch (e) { if (box) box.innerHTML = `<div style="padding:16px;font-size:12.5px;color:var(--up)">실행 실패</div>`; }
 }
 async function mbLoadRebalance(){
   const box = document.getElementById('m-rb');

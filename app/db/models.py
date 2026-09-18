@@ -122,6 +122,52 @@ class UserApiKey(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class PaperAccount(Base):
+    """모의투자 계좌 — 실제 돈이 오가지 않는 가상 현금 잔고 (단일 계좌, id=1 고정 사용)."""
+    __tablename__ = "paper_account"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cash_krw = Column(Float, default=10_000_000.0)          # 현재 가상 현금 (원)
+    initial_cash_krw = Column(Float, default=10_000_000.0)  # 시작 시드 (리셋 기준)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class PaperTrade(Base):
+    """모의투자 라운드트립 거래 1건 — 진입 시 open 으로 생성, 청산되면 closed 로 갱신.
+    우리 알고리즘(analyze_stock_algo)의 결론·매매 타이밍을 그대로 따라간 가상 체결이며,
+    이 이력이 쌓여 신호 적중률·확신도 모델을 검증·개선하는 학습 데이터가 된다."""
+    __tablename__ = "paper_trade"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)
+    quantity = Column(Float, nullable=False)
+
+    entry_date = Column(String, nullable=False)             # YYYY-MM-DD
+    entry_price = Column(Float, nullable=False)              # 현지통화 1주당
+    entry_price_krw = Column(Float, nullable=False)          # 원화 환산 1주당
+    entry_report_id = Column(Integer)                        # 근거 AnalysisReport.id
+    entry_verdict = Column(String)
+    entry_confidence_score = Column(Integer)
+    entry_confidence_grade = Column(String)
+    target1 = Column(Float)
+    target2 = Column(Float)
+    stop = Column(Float)
+
+    exit_date = Column(String)
+    exit_price = Column(Float)
+    exit_price_krw = Column(Float)
+    exit_reason = Column(String)   # target1 | target2 | stop | verdict_sell | timeout | manual
+
+    pnl_krw = Column(Float)
+    pnl_pct = Column(Float)
+    status = Column(String, default="open", nullable=False)  # open | closed
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 def create_all_tables(db_path: str) -> None:
     import os
     from app.db.client import get_engine
