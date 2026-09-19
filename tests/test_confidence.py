@@ -90,3 +90,30 @@ def test_improvement_hints_kr_dart():
     hints = improvement_hints(conf, {**_NO_COV, "technical_ok": True}, 1, "KR")
     assert any("DART" in h for h in hints)
     assert any("뉴스" in h for h in hints)
+
+
+# ── 모의투자 실전 검증(track_record) — reasons에만 반영, score는 불변 ──
+
+def _score(track_record=None):
+    return analysis_confidence(
+        {"technical": 26, "fundamental": 34, "macro": 16, "news": 8},
+        _FULL_COV, 5, 1, 6, verdict="매수", analyst=_ALIGN_BUY, track_record=track_record,
+    )
+
+
+def test_track_record_not_shown_below_min_sample():
+    r = _score(track_record={"상": {"count": 3, "win_rate": 0.8, "avg_pnl_pct": 5.0}})
+    assert not any("실전 검증" in x for x in r["reasons"])
+
+
+def test_track_record_shown_when_enough_samples():
+    base = _score(track_record=None)
+    r = _score(track_record={"상": {"count": 10, "win_rate": 0.6, "avg_pnl_pct": 3.2}})
+    assert any("실전 검증" in x and "60%" in x for x in r["reasons"])
+    assert r["score"] == base["score"]   # score/grade는 절대 바뀌지 않는다
+    assert r["grade"] == base["grade"]
+
+
+def test_track_record_warns_on_poor_performance():
+    r = _score(track_record={"상": {"count": 10, "win_rate": 0.3, "avg_pnl_pct": -2.1}})
+    assert any("⚠" in x and "실전 검증" in x for x in r["reasons"])

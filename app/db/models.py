@@ -143,6 +143,7 @@ class PaperTrade(Base):
     ticker = Column(String, nullable=False)
     market = Column(String, nullable=False)
     quantity = Column(Float, nullable=False)
+    entry_source = Column(String, default="watchlist")       # watchlist | discovered (AI 발굴)
 
     entry_date = Column(String, nullable=False)             # YYYY-MM-DD
     entry_price = Column(Float, nullable=False)              # 현지통화 1주당
@@ -193,6 +194,7 @@ def create_all_tables(db_path: str) -> None:
             "ALTER TABLE news_item ADD COLUMN summary_ko TEXT",
             "ALTER TABLE news_item ADD COLUMN lang TEXT",
             "ALTER TABLE analysis_report ADD COLUMN source TEXT DEFAULT 'watchlist'",
+            "ALTER TABLE paper_trade ADD COLUMN entry_source TEXT DEFAULT 'watchlist'",
         ]
         for sql in migrations:
             try:

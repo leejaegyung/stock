@@ -97,3 +97,25 @@ def summarize_trades(trades: list[dict]) -> dict:
         "avg_pnl_pct": round(sum(t["pnl_pct"] for t in closed) / n, 2),
         "total_pnl_krw": round(sum(t.get("pnl_krw") or 0 for t in closed)),
     }
+
+
+MIN_TRACK_RECORD_N = 5  # 이 미만 표본은 "학습" 근거로 쓰지 않는다 (노이즈 방지)
+
+
+def breakdown_by(trades: list[dict], key: str) -> list[dict]:
+    """청산된 거래를 key 값별로 묶어 승률·평균손익 산출 — 알고리즘 검증/학습용.
+
+    예: breakdown_by(trades, "entry_confidence_grade")
+        → [{"key":"상","count":18,"win_rate":0.61,...}, {"key":"중",...}, ...]
+    표본이 적을수록 승률이 크게 흔들리므로, 이 비교로 알고리즘 가중치를 자동
+    조정하지는 않는다 — 사람이 참고할 수 있게 투명하게 보여주는 것이 목적이다.
+    """
+    groups: dict = {}
+    for t in trades:
+        if t.get("pnl_pct") is None:
+            continue
+        k = t.get(key) or "미상"
+        groups.setdefault(k, []).append(t)
+    out = [dict(summarize_trades(ts), key=k) for k, ts in groups.items()]
+    out.sort(key=lambda x: x["count"], reverse=True)
+    return out

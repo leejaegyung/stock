@@ -72,6 +72,26 @@ def _external_factor(verdict: str | None, analyst: dict | None) -> tuple[int, st
     return int(ext), tone
 
 
+def _track_record_reason(grade: str, track_record: dict | None) -> str | None:
+    """모의투자 실전 검증 기록 → 투명성 근거 문장 (점수에는 반영하지 않는다).
+
+    표본이 적을수록 승률이 크게 흔들리는데, 그 흔들리는 승률로 매번 자기 점수를
+    재조정하면 오히려 불안정해질 수 있다. 그래서 여기서는 등급별 실전 승률을
+    사람이 참고할 수 있게 투명하게 보여주기만 하고, score/grade는 건드리지 않는다.
+    """
+    if not track_record:
+        return None
+    rec = track_record.get(grade)
+    if not rec or (rec.get("count") or 0) < 5 or rec.get("win_rate") is None:
+        return None
+    wr = rec["win_rate"]
+    n = rec["count"]
+    avg = rec.get("avg_pnl_pct") or 0.0
+    if wr >= 0.55:
+        return f"📊 실전 검증: 확신도 '{grade}' 등급 모의투자 승률 {round(wr * 100)}% ({n}건, 평균 {avg:+.1f}%)"
+    return f"⚠ 실전 검증: 확신도 '{grade}' 등급 모의투자 승률 {round(wr * 100)}% ({n}건) — 최근 성과가 기대보다 낮습니다"
+
+
 def analysis_confidence(
     dim_scores: dict,
     coverage: dict,
@@ -81,12 +101,15 @@ def analysis_confidence(
     verdict: str | None = None,
     analyst: dict | None = None,
     vol_ratio: float | None = None,
+    track_record: dict | None = None,
 ) -> dict:
     """
     :param dim_scores: {"technical","fundamental","macro","news"} 각 원점수
     :param coverage: {"technical_ok","has_ma200","has_pe","has_roe","has_cashflow","n_analysts"}
     :param analyst: {"n","rec_mean","target_gap_pct","dispersion"} — yfinance 컨센서스
     :param vol_ratio: 최근 거래량 / 20일 평균 (방향 확인용)
+    :param track_record: {grade: {"count","win_rate","avg_pnl_pct"}} — 모의투자 실전 성과
+        (app.core.paper_trading.breakdown_by 결과). score에는 영향 없이 reasons에만 반영.
     :returns: {"score":int, "grade":"상|중|하", "factors":[...], "reasons":[...]}
     """
     total = sum(dim_scores.get(k, 0) for k in ("technical", "fundamental", "macro", "news"))
@@ -181,6 +204,10 @@ def analysis_confidence(
 
     if near_thr is not None:
         reasons.append(f"종합점수 {total}점, 결론 경계선({near_thr}) 근처 — 소폭 변동에 등급이 바뀔 수 있음")
+
+    tr_reason = _track_record_reason(grade, track_record)
+    if tr_reason:
+        reasons.append(tr_reason)
 
     return {
         "score": int(score),

@@ -42,6 +42,9 @@ app/core/formulas.py             — EV·켈리·CAPE·현금흐름 순수 함�
 app/core/confidence.py           — 분석 확신도 모델 순수 함수 (Layer 1): 커버리지·신호 일치도·
                                    신호 우위(+거래량)·점수 확신·뉴스 근거·외부 검증(월가 컨센서스)
                                    6요소 → 0~100 + 상/중/하 + 근거 + 힌트. _verdict 점수구간 확신도 대체
+                                   track_record(모의투자 등급별 실전 승률, 5건 미만은 무시)를 넘기면
+                                   "실전 검증" 근거 문장을 reasons에 투명하게 추가 — score/grade는 불변
+                                   (표본이 적을 때 자기 점수를 스스로 재조정하면 불안정해지므로 의도적으로 분리)
 app/core/translate.py            — 외신 뉴스 한국어 자동 번역 (유틸): 언어감지 + 기계번역(gtx/MyMemory)
                                    체인. LLM 미사용. 원문·원문링크 보존, 결과는 NewsItem 에 캐시
 app/core/market_scan.py          — 시장 국면·섹터 모멘텀 순수 함수 (Layer 1)
@@ -65,9 +68,13 @@ app/core/quant.py                — 포트폴리오 계량 분석 순수 함수
                                    MDD·VaR·베타·상관·분산비율·비중 최적화(동일/역변동성/리스크패리티/
                                    최소분산)·리밸런싱 백테스트. gs-quant timeseries 스타일, 외부 API 없음
 app/core/paper_trading.py        — 모의투자(가상 매매) 순수 함수 (Layer 1): 켈리 비중 기반 포지션 크기·
-                                   청산 트리거(손절>2차목표>1차목표>결론반전>보유기간초과)·손익·승률 집계.
-                                   실제 자금 없음 — 관심종목의 매수/추가매수 결론 + trade_plan 을 그대로
-                                   따라간 가상 체결을 PaperAccount/PaperTrade 에 기록해 신호 적중률 검증에 사용.
+                                   청산 트리거(손절>2차목표>1차목표>결론반전>보유기간초과)·손익·승률 집계·
+                                   breakdown_by(결론/확신도/출처별 승률 — "학습 인사이트" 근거).
+                                   실제 자금 없음 — 관심종목 + AI 발굴 종목(source='discovered', 최대
+                                   _PAPER_DISCOVER_MAX=5 동시보유)의 매수/추가매수 결론 + trade_plan 을
+                                   그대로 따라간 가상 체결을 PaperAccount/PaperTrade(entry_source 태그)에
+                                   기록해 신호 적중률을 주기적으로 검증 — 승률은 confidence.py의 track_record
+                                   로도 흘러들어가 향후 리포트에 "실전 검증" 근거로 투명하게 표시된다.
                                    /api/paper/status·run·reset, 스케줄러 KST 11:00 자동 실행(브리핑 이후)
 app/db/models.py                 — Watchlist, AnalysisReport, NewsItem, PaperAccount, PaperTrade(모의투자)
 app/db/client.py                 — SQLite + WAL 모드

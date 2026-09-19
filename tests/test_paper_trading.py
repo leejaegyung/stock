@@ -1,6 +1,7 @@
 """모의투자 의사결정 로직 — 순수 함수 테스트 (실제 자금 없음)."""
 
 from app.core.paper_trading import (
+    breakdown_by,
     compute_pnl,
     position_size,
     should_exit,
@@ -89,3 +90,28 @@ def test_summarize_trades_empty():
     s = summarize_trades([])
     assert s["count"] == 0
     assert s["win_rate"] is None
+
+
+def test_breakdown_by_groups_and_sorts_by_count():
+    trades = [
+        {"pnl_pct": 5.0, "pnl_krw": 50_000, "entry_source": "watchlist"},
+        {"pnl_pct": -3.0, "pnl_krw": -30_000, "entry_source": "watchlist"},
+        {"pnl_pct": 8.0, "pnl_krw": 80_000, "entry_source": "watchlist"},
+        {"pnl_pct": 2.0, "pnl_krw": 20_000, "entry_source": "discovered"},
+        {"pnl_pct": None, "entry_source": "discovered"},  # 미청산 — 제외
+    ]
+    out = breakdown_by(trades, "entry_source")
+    assert out[0]["key"] == "watchlist"
+    assert out[0]["count"] == 3
+    assert out[1]["key"] == "discovered"
+    assert out[1]["count"] == 1
+
+
+def test_breakdown_by_missing_key_bucketed_as_unknown():
+    trades = [{"pnl_pct": 1.0, "pnl_krw": 1000}]
+    out = breakdown_by(trades, "entry_confidence_grade")
+    assert out[0]["key"] == "미상"
+
+
+def test_breakdown_by_empty():
+    assert breakdown_by([], "entry_source") == []

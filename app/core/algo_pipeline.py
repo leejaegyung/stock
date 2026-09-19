@@ -660,12 +660,16 @@ def analyze_stock_algo(
     date_str: str,
     macro_data: dict | None = None,
     held: bool = True,
+    track_record: dict | None = None,
 ) -> dict:
     """
     LLM-free stock analysis. Same output contract as pipeline.analyze_stock().
 
     :param held: 실제 보유 수량이 있는지 (관심종목이라도 수량 미기입이면 False).
         매매 타이밍 섹션의 문구가 "추가매수/비중축소" 대신 "신규 진입"으로 바뀐다.
+    :param track_record: 모의투자 실전 검증 기록 (app.core.paper_trading.breakdown_by 결과를
+        {grade: stats} 로 변환한 것). confidence.py의 reasons 에만 투명하게 반영되고
+        score/grade 계산에는 영향을 주지 않는다.
     """
     ds = USDataSource() if market.upper() != "KR" else KRDataSource()
 
@@ -745,6 +749,7 @@ def analyze_stock_algo(
         {"technical": ts, "fundamental": fs, "macro": ms, "news": ns},
         coverage, len(bulls), len(bears), len(news),
         verdict=vd, analyst=analyst, vol_ratio=ta.get("vol_ratio"),
+        track_record=track_record,
     )
     conf["hints"] = improvement_hints(conf, coverage, len(news), market)
     conf["analyst"] = analyst
@@ -812,7 +817,9 @@ def classify_news_algo(headline: str, summary: str) -> str:
 
 # ── 13. 아침 브리핑 ──────────────────────────────────────────────────────────
 
-def morning_brief_algo(watchlist: list[dict], date_str: str | None = None) -> str:
+def morning_brief_algo(
+    watchlist: list[dict], date_str: str | None = None, track_record: dict | None = None,
+) -> str:
     if date_str is None:
         date_str = date.today().isoformat()
 
@@ -823,7 +830,7 @@ def morning_brief_algo(watchlist: list[dict], date_str: str | None = None) -> st
         ticker, market = stock["ticker"], stock["market"]
         logger.info("Algo analyzing %s [%s]", ticker, market)
         try:
-            r = analyze_stock_algo(ticker, market, date_str, macro_data=shared_macro)
+            r = analyze_stock_algo(ticker, market, date_str, macro_data=shared_macro, track_record=track_record)
             results.append(r)
         except Exception as e:
             logger.error("Algo analysis failed %s: %s", ticker, e)

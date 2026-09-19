@@ -50,12 +50,17 @@ def _run_morning_brief() -> None:
     import json as _json
     from datetime import datetime as _dt
     from app.core.algo_pipeline import classify_news_algo
-    from app.entrypoints.web import _report_metrics
+    from app.entrypoints.web import _paper_confidence_track_record, _report_metrics
+
+    track_record = _paper_confidence_track_record()
 
     for stock in watchlist:
         ticker, market = stock["ticker"], stock["market"]
         try:
-            result = analyze_stock_algo(ticker, market, date_str, macro_data=shared_macro, held=stock["held"])
+            result = analyze_stock_algo(
+                ticker, market, date_str, macro_data=shared_macro,
+                held=stock["held"], track_record=track_record,
+            )
             advice = result.get("advice", {})
             with factory() as session:
                 # 이전 보고서 삭제 후 새 보고서 저장
@@ -97,7 +102,7 @@ def _run_morning_brief() -> None:
             logger.error("Brief analyze %s failed: %s", ticker, e)
 
     # 전체 브리핑 요약 저장
-    brief_md = morning_brief_algo(watchlist, date_str)
+    brief_md = morning_brief_algo(watchlist, date_str, track_record=track_record)
     with factory() as session:
         # 이전 브리핑 삭제 후 새 브리핑 저장
         session.query(AnalysisReport).filter(
@@ -196,7 +201,7 @@ def _trigger_deep_analysis(ticker: str, market: str, client, factory) -> None:
     from datetime import date, datetime as _dt
     from app.core.algo_pipeline import analyze_stock_algo, classify_news_algo
     from app.db.models import AnalysisReport
-    from app.entrypoints.web import _report_metrics
+    from app.entrypoints.web import _paper_confidence_track_record, _report_metrics
 
     date_str = date.today().isoformat()
     logger.info("Auto algo-analysis triggered: %s [%s]", ticker, market)
@@ -204,7 +209,9 @@ def _trigger_deep_analysis(ticker: str, market: str, client, factory) -> None:
         with factory() as session:
             wl_row = session.query(Watchlist).filter_by(ticker=ticker, market=market).first()
             held = bool(wl_row and (wl_row.quantity or 0) > 0)
-        result = analyze_stock_algo(ticker, market, date_str, held=held)
+        result = analyze_stock_algo(
+            ticker, market, date_str, held=held, track_record=_paper_confidence_track_record(),
+        )
         advice = result.get("advice", {})
         with factory() as session:
             # 이전 보고서 삭제 후 새 보고서 저장
@@ -390,10 +397,15 @@ def _discover_and_analyze(top: list) -> None:
     date_str = date.today().isoformat()
     logger.info("discover: analyzing %d candidates: %s", len(picks), [p["ticker"] for p in picks])
 
+    from app.entrypoints.web import _paper_confidence_track_record
+    track_record = _paper_confidence_track_record()
+
     for p in picks:
         ticker, market = p["ticker"], p["market"]
         try:
-            result = analyze_stock_algo(ticker, market, date_str, held=False)  # 관심목록 밖 = 미보유
+            result = analyze_stock_algo(
+                ticker, market, date_str, held=False, track_record=track_record,
+            )  # 관심목록 밖 = 미보유
             advice = result.get("advice", {})
             import json as _json
             from app.entrypoints.web import _report_metrics

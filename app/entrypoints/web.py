@@ -496,7 +496,7 @@ def _bg_analyze(ticker: str, market: str, date_str: str) -> None:
 
     import time as _t
     _t0 = _t.perf_counter()
-    result = analyze_stock_algo(ticker, market, date_str, held=held)
+    result = analyze_stock_algo(ticker, market, date_str, held=held, track_record=_paper_confidence_track_record())
     result["_duration_sec"] = round(_t.perf_counter() - _t0, 1)
     advice = result.get("advice", {})
 
@@ -607,12 +607,16 @@ def _bg_brief() -> None:
         return
 
     shared_macro = USDataSource().get_macro_data()
+    track_record = _paper_confidence_track_record()
     verdicts: list[str] = []
 
     for stock in items:
         ticker, market = stock["ticker"], stock["market"]
         try:
-            result = analyze_stock_algo(ticker, market, date_str, macro_data=shared_macro, held=stock["held"])
+            result = analyze_stock_algo(
+                ticker, market, date_str, macro_data=shared_macro,
+                held=stock["held"], track_record=track_record,
+            )
             advice = result.get("advice", {})
             with _session() as session:
                 # 이전 보고서 삭제 후 새 보고서 저장
@@ -654,7 +658,7 @@ def _bg_brief() -> None:
         except Exception as e:
             logger.error("brief analyze %s failed: %s", ticker, e)
 
-    brief_md = morning_brief_algo(items, date_str)
+    brief_md = morning_brief_algo(items, date_str, track_record=track_record)
     with _session() as session:
         # 이전 브리핑 삭제 후 새 브리핑 저장
         session.query(AnalysisReport).filter(
@@ -2448,6 +2452,7 @@ async def market_scanner(refresh: bool = False) -> dict:
 
 _PAPER_ENTRY_VERDICTS = ("매수", "추가매수")
 _PAPER_MAX_HOLD_DAYS = 90
+_PAPER_DISCOVER_MAX = 5  # 동시 보유 가능한 'AI 발굴' 출처 가상 포지션 수 상한 (관심종목과 별개)
 
 
 def _get_or_create_paper_account(session) -> PaperAccount:
@@ -2458,6 +2463,27 @@ def _get_or_create_paper_account(session) -> PaperAccount:
         session.commit()
         session.refresh(acct)
     return acct
+
+
+def _paper_confidence_track_record() -> dict:
+    """모의투자 청산 이력을 확신도 등급별로 집계 → {"상":{...},"중":{...},"하":{...}}.
+
+    analyze_stock_algo(track_record=...) 에 전달되어 리포트의 확신도 근거에
+    "실전 검증" 문구로 투명하게 반영된다 (score/grade 자체는 바꾸지 않음 —
+    표본이 적을 때 자기 점수를 스스로 재조정하면 오히려 불안정해지기 때문).
+    """
+    from app.core.paper_trading import breakdown_by
+    try:
+        with _session() as session:
+            rows = session.query(PaperTrade).filter_by(status="closed").all()
+            data = [{
+                "pnl_pct": r.pnl_pct, "pnl_krw": r.pnl_krw,
+                "entry_confidence_grade": r.entry_confidence_grade,
+            } for r in rows]
+        return {d["key"]: d for d in breakdown_by(data, "entry_confidence_grade")}
+    except Exception as e:
+        logger.debug("paper track record lookup failed: %s", e)
+        return {}
 
 
 def _run_paper_trading() -> dict:
@@ -2524,17 +2550,40 @@ def _run_paper_trading() -> dict:
                 })
             session.commit()
 
-        # ── 2) 신규 진입 (관심종목 중 매수/추가매수 결론 + 미보유 포지션) ──
-        open_tickers = {
-            (t.ticker, t.market)
-            for t in session.query(PaperTrade).filter_by(status="open").all()
-        }
-        for w in session.query(Watchlist).all():
-            if (w.ticker, w.market) in open_tickers:
+        # ── 2) 신규 진입 ──
+        # (a) 관심종목 중 매수/추가매수 결론 + 미보유 포지션
+        # (b) AI가 발굴한 유망 종목(source='discovered')도 동일하게 모의 진입 —
+        #     스캐너·발굴 알고리즘이 실전에서 얼마나 맞는지 그대로 검증/학습하기 위함
+        open_trades_now = session.query(PaperTrade).filter_by(status="open").all()
+        open_tickers = {(t.ticker, t.market) for t in open_trades_now}
+        watch_keys = {(w.ticker, w.market) for w in session.query(Watchlist).all()}
+        n_open_discovered = sum(1 for t in open_trades_now if t.entry_source == "discovered")
+
+        candidates: list[tuple[str, str, str]] = [(w[0], w[1], "watchlist") for w in watch_keys]
+        disc_slots = max(0, _PAPER_DISCOVER_MAX - n_open_discovered)
+        if disc_slots:
+            seen_disc: set[tuple[str, str]] = set()
+            disc_rows = (
+                session.query(AnalysisReport)
+                .filter(AnalysisReport.source == "discovered")
+                .order_by(AnalysisReport.id.desc())
+                .all()
+            )
+            for r in disc_rows:
+                key = (r.ticker, r.market)
+                if key in seen_disc or key in watch_keys:
+                    continue
+                seen_disc.add(key)
+                candidates.append((r.ticker, r.market, "discovered"))
+                if len(seen_disc) >= disc_slots:
+                    break
+
+        for ticker, market, src in candidates:
+            if (ticker, market) in open_tickers:
                 continue
             latest = (
                 session.query(AnalysisReport)
-                .filter_by(ticker=w.ticker, market=w.market)
+                .filter_by(ticker=ticker, market=market)
                 .order_by(AnalysisReport.id.desc())
                 .first()
             )
@@ -2547,14 +2596,14 @@ def _run_paper_trading() -> dict:
             if not price_raw:
                 continue
             kelly_pct = (m.get("half_kelly") or 0) * 100  # half_kelly 는 0~1 소수 → % 로 환산
-            price_krw = round(price_raw * usd_krw) if w.market == "US" else round(price_raw)
+            price_krw = round(price_raw * usd_krw) if market == "US" else round(price_raw)
 
             sized = position_size(acct.cash_krw, kelly_pct, price_krw)
             if sized["qty"] <= 0:
                 continue
 
             session.add(PaperTrade(
-                ticker=w.ticker, market=w.market, quantity=sized["qty"],
+                ticker=ticker, market=market, quantity=sized["qty"], entry_source=src,
                 entry_date=today, entry_price=price_raw, entry_price_krw=price_krw,
                 entry_report_id=latest.id, entry_verdict=latest.verdict,
                 entry_confidence_score=m.get("confidence_score"),
@@ -2563,9 +2612,10 @@ def _run_paper_trading() -> dict:
                 status="open",
             ))
             acct.cash_krw -= sized["budget_krw"]
+            open_tickers.add((ticker, market))
             opened.append({
-                "ticker": w.ticker, "market": w.market, "qty": sized["qty"],
-                "budget_krw": sized["budget_krw"], "verdict": latest.verdict,
+                "ticker": ticker, "market": market, "qty": sized["qty"],
+                "budget_krw": sized["budget_krw"], "verdict": latest.verdict, "source": src,
             })
 
         acct.updated_at = datetime.now(timezone.utc)
@@ -2578,17 +2628,15 @@ def _run_paper_trading() -> dict:
 @app.get("/api/paper/status")
 async def paper_status() -> dict:
     """모의투자 계좌 현황: 현금·평가금액·수익률 + 보유 포지션(평가손익 포함) + 최근 거래 이력."""
-    from app.core.paper_trading import EXIT_REASON_LABEL, summarize_trades
+    from app.core.paper_trading import EXIT_REASON_LABEL, breakdown_by, summarize_trades
 
     usd_krw = _macro_cache.get("data", {}).get("usd_krw", {}).get("price") or 1380.0
 
     with _session() as session:
         acct = _get_or_create_paper_account(session)
         open_trades = session.query(PaperTrade).filter_by(status="open").order_by(PaperTrade.id.desc()).all()
-        closed_trades = (
-            session.query(PaperTrade).filter_by(status="closed")
-            .order_by(PaperTrade.id.desc()).limit(30).all()
-        )
+        all_closed = session.query(PaperTrade).filter_by(status="closed").order_by(PaperTrade.id.desc()).all()
+        closed_trades = all_closed[:30]
 
         positions = []
         positions_value = 0
@@ -2611,6 +2659,7 @@ async def paper_status() -> dict:
                     "unrealized_pnl_krw": value_krw - cost_krw,
                     "unrealized_pnl_pct": round((value_krw / cost_krw - 1) * 100, 2) if cost_krw else None,
                     "entry_verdict": t.entry_verdict, "entry_confidence_grade": t.entry_confidence_grade,
+                    "entry_source": t.entry_source or "watchlist",
                     # target1/target2/stop 은 entry_price 와 같은 현지통화 단위 (entry_price_krw 아님)
                     "target1": t.target1, "target2": t.target2, "stop": t.stop,
                 })
@@ -2622,10 +2671,23 @@ async def paper_status() -> dict:
             "exit_date": t.exit_date, "exit_price": t.exit_price, "exit_price_krw": t.exit_price_krw,
             "exit_reason": t.exit_reason, "exit_reason_label": EXIT_REASON_LABEL.get(t.exit_reason, t.exit_reason),
             "pnl_krw": t.pnl_krw, "pnl_pct": t.pnl_pct,
-            "entry_verdict": t.entry_verdict,
+            "entry_verdict": t.entry_verdict, "entry_source": t.entry_source or "watchlist",
         } for t in closed_trades]
 
-        stats = summarize_trades([{"pnl_pct": t.pnl_pct, "pnl_krw": t.pnl_krw} for t in closed_trades])
+        # 전체 청산 이력(표시용 30건 제한과 무관) 기준으로 학습/검증 지표 산출
+        all_closed_d = [{
+            "pnl_pct": t.pnl_pct, "pnl_krw": t.pnl_krw,
+            "entry_verdict": t.entry_verdict,
+            "entry_confidence_grade": t.entry_confidence_grade,
+            "entry_source": t.entry_source or "watchlist",
+        } for t in all_closed]
+        stats = summarize_trades(all_closed_d)
+        learning = {
+            "by_verdict": breakdown_by(all_closed_d, "entry_verdict"),
+            "by_confidence": breakdown_by(all_closed_d, "entry_confidence_grade"),
+            "by_source": breakdown_by(all_closed_d, "entry_source"),
+            "min_sample_note": "표본이 5건 미만인 구간은 참고용으로만 보세요.",
+        }
         equity = round(acct.cash_krw + positions_value)
         total_return_pct = (
             round((equity / acct.initial_cash_krw - 1) * 100, 2) if acct.initial_cash_krw else None
@@ -2640,6 +2702,7 @@ async def paper_status() -> dict:
             "positions": positions,
             "recent_trades": trades_out,
             "stats": stats,
+            "learning": learning,
             "disclaimer": "실제 자금·실제 계좌와 무관한 가상 시뮬레이션입니다.",
         }
 
