@@ -75,7 +75,9 @@ app/core/paper_trading.py        — 모의투자(가상 매매) 순수 함수 (
                                    그대로 따라간 가상 체결을 PaperAccount/PaperTrade(entry_source 태그)에
                                    기록해 신호 적중률을 주기적으로 검증 — 승률은 confidence.py의 track_record
                                    로도 흘러들어가 향후 리포트에 "실전 검증" 근거로 투명하게 표시된다.
-                                   /api/paper/status·run·reset, 스케줄러 KST 11:00 자동 실행(브리핑 이후)
+                                   /api/paper/status·run·reset, 스케줄러가 장중(미국·한국 중 한쪽이라도
+                                   개장) 15분마다 자동 실행 — 사용자가 직접 실행하지 않아도 실시간
+                                   가격으로 청산·신규 진입을 계속 추종한다. 두 시장 모두 마감이면 스킵.
 app/db/models.py                 — Watchlist, AnalysisReport, NewsItem, PaperAccount, PaperTrade(모의투자)
 app/db/client.py                 — SQLite + WAL 모드
 app/core/datasources/us.py       — yfinance 데이터소스 (US)

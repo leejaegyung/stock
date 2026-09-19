@@ -451,18 +451,23 @@ def _discover_and_analyze(top: list) -> None:
 
 
 def _paper_trade_job() -> None:
-    """모의투자(가상 매매) 1일 1회 실행 — 실제 자금·실제 주문과 무관.
+    """모의투자(가상 매매) 장중 자동 추종 — 실제 자금·실제 주문과 무관.
 
-    아침 브리핑(10:30)으로 그날 리포트 결론이 갱신된 뒤에 돌아야 최신 신호를 반영한다.
+    사용자가 직접 실행하지 않아도 미국·한국 둘 중 한쪽이라도 장이 열려 있으면
+    주기적으로 돌며 실시간 가격으로 청산(손절/목표가 도달) 판정하고, 그날의
+    최신 리포트 결론(매수/추가매수)에 따라 신규 진입도 반영한다. 두 시장 모두
+    닫혀 있으면 불필요한 시세 조회를 피하기 위해 건너뛴다.
     """
     try:
-        from app.entrypoints.web import _run_paper_trading
+        from app.entrypoints.web import _run_paper_trading, _kr_market_state, _us_market_state
+
+        if _us_market_state() == "CLOSED" and _kr_market_state() == "CLOSED":
+            return
 
         result = _run_paper_trading()
-        logger.info(
-            "paper trading job: opened=%d closed=%d",
-            len(result.get("opened", [])), len(result.get("closed", [])),
-        )
+        opened, closed = result.get("opened", []), result.get("closed", [])
+        if opened or closed:
+            logger.info("paper trading tick: opened=%d closed=%d", len(opened), len(closed))
     except Exception as e:
         logger.warning("paper_trade job failed: %s", e)
 
@@ -552,12 +557,14 @@ def start_scheduler() -> BackgroundScheduler:
         coalesce=True,
     )
 
-    # 모의투자: KST 11:00 매일 (아침 브리핑 이후 — 그날 갱신된 결론 반영). 실제 자금 없음.
+    # 모의투자: 15분마다 (장중에만 실제로 동작 — _paper_trade_job 안에서 장 마감이면 스킵).
+    # 사용자가 직접 실행하지 않아도 실시간 가격으로 청산·신규 진입을 계속 추종한다.
     _scheduler.add_job(
         _paper_trade_job,
-        trigger=CronTrigger(hour=11, minute=0, timezone=KST),
+        trigger=IntervalTrigger(minutes=15),
         id="paper_trade_sim",
         replace_existing=True,
+        next_run_time=datetime.now(KST) + timedelta(minutes=1),  # 기동 직후 1회
         max_instances=1,
         coalesce=True,
     )
@@ -565,7 +572,7 @@ def start_scheduler() -> BackgroundScheduler:
     _scheduler.start()
     logger.info(
         "Scheduler started. Brief: KST 10:30 | Watcher: KST 12:00, 18:00 | "
-        "Cleanup: KST 03:00 | Scan: KST 06:40 | Paper trade: KST 11:00",
+        "Cleanup: KST 03:00 | Scan: KST 06:40 | Paper trade: 장중 15분마다",
     )
     return _scheduler
 
