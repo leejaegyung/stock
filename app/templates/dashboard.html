@@ -3495,6 +3495,10 @@ const MB = {
   pf: {},              // ticker-market → portfolio row
   pfList: [],
   poll: null,
+  txType: '수입',       // 가계부 빠른 입력 — 수입|지출|고정
+  fixedSub: '수입',     // 고정 입력 시 수입/지출 서브타입
+  fixedItems: [],
+  fixedMap: {},
 };
 const MB_MQ = window.matchMedia('(max-width:640px)');
 
@@ -4265,10 +4269,14 @@ async function mbAssets(){
           <option value="inverse_vol">역변동성</option><option value="min_variance">최소 분산</option>
         </select></div>
       <div class="m-pad"><div class="m-card" id="m-rb" style="overflow:hidden"><div class="m-skel" style="height:56px;margin:12px"></div></div></div>` : ''}
-      <div class="m-sec"><b>이번 달 가계부</b></div>
+      <div class="m-sec"><b>이번 달 가계부</b><a onclick="mbOpenAddTxSheet()">+ 추가</a></div>
+      <div id="m-fixed-chips-wrap" style="display:none;padding:0 20px 8px">
+        <div id="m-fixed-chips" style="display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px"></div>
+      </div>
       <div class="m-pad"><div class="m-card" id="m-tx" style="overflow:hidden"><div class="m-skel" style="height:56px;margin:12px"></div></div></div>`;
 
     mbLoadTx();
+    mbLoadFixedChips();
     mbLoadPaperTrading();
     if (held.length >= 2) mbLoadRebalance();
   } catch (e) {
@@ -4366,19 +4374,130 @@ async function mbLoadTx(){
   const now = new Date();
   try {
     const list = await api(`/api/ledger/transactions?year=${now.getFullYear()}&month=${now.getMonth() + 1}`);
-    const rows = (list || []).slice(0, 5);
-    box.innerHTML = rows.length ? rows.map((t, i, a) => {
+    MB._txList = list || [];
+    const rows = MB._txList;
+    box.innerHTML = rows.length ? `<div style="max-height:340px;overflow-y:auto">` + rows.map((t, i, a) => {
       const inc = t.type === '수입';
-      return `<div style="display:flex;align-items:center;gap:11px;padding:11px 14px${i < a.length - 1 ? ';border-bottom:1px solid var(--line)' : ''}">
+      return `<div style="display:flex;align-items:center;gap:10px;padding:11px 14px${i < a.length - 1 ? ';border-bottom:1px solid var(--line)' : ''}">
         <div style="width:34px;height:34px;border-radius:11px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--chip);font-size:11px;font-weight:600;color:var(--sub)">${esc((t.category || '').slice(0, 2))}</div>
         <div style="flex:1;min-width:0">
           <div style="font-size:14px;font-weight:500;letter-spacing:-.015em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.memo || t.category)}</div>
           <div style="font-size:12px;color:var(--mute);font-variant-numeric:tabular-nums">${esc((t.date || '').slice(5))} · ${esc(t.category)}</div>
         </div>
         <span style="font-size:14.5px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;flex-shrink:0;color:${inc ? 'var(--up)' : 'var(--ink)'}">${inc ? '+' : '-'}${Number(t.amount).toLocaleString('ko-KR')}원</span>
+        <button class="m-del" style="width:26px;height:26px;font-size:14px;flex-shrink:0" onclick="mbDeleteTx(${t.id})">×</button>
       </div>`;
-    }).join('') : '<div style="padding:22px;text-align:center;color:var(--mute);font-size:12.5px">이번 달 내역이 없습니다</div>';
+    }).join('') + `</div>` : '<div style="padding:22px;text-align:center;color:var(--mute);font-size:12.5px">이번 달 내역이 없습니다</div>';
   } catch { box.innerHTML = ''; }
+}
+async function mbDeleteTx(id){
+  try {
+    await api(`/api/ledger/transactions/${id}`, { method: 'DELETE' });
+    toast('삭제됨');
+    if (MB.view === 'assets') mbAssets(); else { mbLoadTx(); }
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function mbLoadFixedChips(){
+  const wrap = document.getElementById('m-fixed-chips-wrap');
+  const el = document.getElementById('m-fixed-chips');
+  if (!wrap || !el) return;
+  try {
+    const list = await api('/api/recurring');
+    MB.fixedItems = list || [];
+    MB.fixedMap = {};
+    MB.fixedItems.forEach(r => { MB.fixedMap[r.id] = r; });
+    const active = MB.fixedItems.filter(r => r.is_active);
+    if (!active.length){ wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
+    el.innerHTML = active.map(r => {
+      const inc = r.type === '수입';
+      const label = (r.memo && r.memo !== '[고정]') ? r.memo : r.category;
+      return `<div onclick="mbApplyFixedItem(${r.id})" style="flex-shrink:0;display:flex;flex-direction:column;gap:2px;padding:8px 12px;border-radius:12px;background:${inc ? 'var(--up-a10)' : 'var(--accent-a08)'};border:1px solid ${inc ? 'var(--up-a10)' : 'var(--accent-line)'};min-width:96px">
+        <span style="font-size:11px;font-weight:600;color:${inc ? 'var(--up)' : 'var(--accent-strong)'}">${esc(label)}</span>
+        <span style="font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums">${inc ? '+' : '-'}${Number(r.amount).toLocaleString('ko-KR')}</span>
+      </div>`;
+    }).join('');
+  } catch { wrap.style.display = 'none'; }
+}
+async function mbApplyFixedItem(id){
+  const r = MB.fixedMap[id];
+  if (!r) return;
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const memo = (r.memo && r.memo !== '[고정]') ? r.memo : r.category;
+  try {
+    await api('/api/ledger/transactions', { method: 'POST', body: JSON.stringify({ date: dateStr, type: r.type, category: r.category, amount: r.amount, memo }) });
+    toast(`${memo} ${Number(r.amount).toLocaleString('ko-KR')}원 추가됨`);
+    if (MB.view === 'assets') mbAssets();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ── 가계부 빠른 입력 (바텀 시트) ── */
+function mbOpenAddTxSheet(){
+  const today = new Date();
+  MB._txDate = MB._txDate || `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const isFixed = MB.txType === '고정';
+  const cats = MB.txType === '지출' ? EXPENSE_CATS
+    : isFixed ? (MB.fixedSub === '수입' ? INCOME_CATS : EXPENSE_CATS)
+    : INCOME_CATS;
+  mbOpenSheet(`
+    <div style="font-size:18px;font-weight:700;letter-spacing:-.025em;margin-bottom:14px">가계부 추가</div>
+    <div class="m-seg" style="margin-bottom:10px">
+      <button class="${MB.txType === '수입' ? 'on' : ''}" onclick="mbSetTxType('수입')">수입</button>
+      <button class="${MB.txType === '지출' ? 'on' : ''}" onclick="mbSetTxType('지출')">지출</button>
+      <button class="${MB.txType === '고정' ? 'on' : ''}" onclick="mbSetTxType('고정')">고정</button>
+    </div>
+    ${isFixed ? `<div class="m-seg" style="margin-bottom:10px">
+      <button class="${MB.fixedSub === '수입' ? 'on' : ''}" onclick="mbSetFixedSub('수입')">수입</button>
+      <button class="${MB.fixedSub === '지출' ? 'on' : ''}" onclick="mbSetFixedSub('지출')">지출</button>
+    </div>
+    <input type="number" class="m-inp" id="m-tx-day" placeholder="매월 며칠 (1~28)" value="${MB._txDay || 1}" min="1" max="28" style="margin-bottom:8px">`
+      : `<input type="date" class="m-inp" id="m-tx-date" value="${MB._txDate}" style="margin-bottom:8px">`}
+    <select class="m-inp" id="m-tx-category" style="margin-bottom:8px">${cats.map(c => `<option>${c}</option>`).join('')}</select>
+    <input class="m-inp" id="m-tx-amount" inputmode="numeric" placeholder="금액 (원)" value="${MB._txAmount || ''}" oninput="fmtInput(this)" style="margin-bottom:8px">
+    <input class="m-inp" id="m-tx-memo" placeholder="메모 (선택)" value="${esc(MB._txMemo || '')}" style="margin-bottom:14px">
+    <button class="m-btn-primary" id="m-tx-submit" onclick="mbSubmitTx()">${isFixed ? '고정 등록' : '추가'}</button>
+  `);
+  setTimeout(() => { const i = document.getElementById('m-tx-amount'); if (i && !isFixed) i.focus(); }, 60);
+}
+function mbSnapshotTxForm(){
+  const a = document.getElementById('m-tx-amount'), m = document.getElementById('m-tx-memo'), d = document.getElementById('m-tx-date');
+  if (a) MB._txAmount = a.value;
+  if (m) MB._txMemo = m.value;
+  if (d) MB._txDate = d.value;
+}
+function mbSetTxType(type){ mbSnapshotTxForm(); MB.txType = type; mbOpenAddTxSheet(); }
+function mbSetFixedSub(sub){ mbSnapshotTxForm(); MB.fixedSub = sub; mbOpenAddTxSheet(); }
+async function mbSubmitTx(){
+  const category = document.getElementById('m-tx-category').value;
+  const amount = parseWon(document.getElementById('m-tx-amount').value);
+  const memo = document.getElementById('m-tx-memo').value.trim();
+  const btn = document.getElementById('m-tx-submit');
+  if (!amount || amount <= 0){ toast('금액을 입력해주세요', 'err'); return; }
+
+  if (MB.txType === '고정'){
+    const day = parseInt(document.getElementById('m-tx-day').value, 10) || 1;
+    btn.disabled = true;
+    try {
+      await api('/api/recurring', { method: 'POST', body: JSON.stringify({ type: MB.fixedSub, category, amount, memo, day_of_month: day }) });
+      toast(`고정 ${MB.fixedSub} 등록됨 (매월 ${day}일)`);
+      MB._txAmount = ''; MB._txMemo = '';
+      mbCloseSheet();
+      if (MB.view === 'assets') mbLoadFixedChips();
+    } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
+    return;
+  }
+
+  const date = document.getElementById('m-tx-date').value;
+  if (!date){ toast('날짜를 입력해주세요', 'err'); return; }
+  btn.disabled = true;
+  try {
+    await api('/api/ledger/transactions', { method: 'POST', body: JSON.stringify({ date, type: MB.txType, category, amount, memo }) });
+    toast(`${MB.txType} ${Number(amount).toLocaleString('ko-KR')}원 추가됨`);
+    MB._txAmount = ''; MB._txMemo = ''; MB._txDate = date;
+    mbCloseSheet();
+    if (MB.view === 'assets') mbAssets();
+  } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
 }
 
 /* ── 뉴스 ── */
