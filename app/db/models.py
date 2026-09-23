@@ -122,6 +122,17 @@ class UserApiKey(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class AppSetting(Base):
+    """앱 전역 설정 (key-value). 현재는 가계부 월급날(payday) 등 소수 항목만 사용."""
+    __tablename__ = "app_setting"
+    __table_args__ = (UniqueConstraint("key"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String, nullable=False)
+    value = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class PaperAccount(Base):
     """모의투자 계좌 — 실제 돈이 오가지 않는 가상 현금 잔고 (단일 계좌, id=1 고정 사용)."""
     __tablename__ = "paper_account"

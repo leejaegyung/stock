@@ -862,6 +862,7 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
       <div class="box">
         <div class="box-head">
           <span class="box-title">가계부</span>
+          <select id="payday-select" onchange="changePaydaySetting()" title="월급날을 기준으로 한 달을 계산합니다" style="height:24px;font-size:10.5px;border-radius:7px;border:1px solid var(--line-2);background:var(--input);color:var(--sub);padding:0 4px;margin-right:6px"></select>
           <div class="month-nav"><button onclick="shiftMonth(-1)">‹</button><span class="month-label" id="month-label"></span><button onclick="shiftMonth(1)">›</button></div>
         </div>
         <div id="tx-list" class="box-body-flush"><div class="empty"><div class="empty-icon">—</div>거래 내역이 없습니다.</div></div>
@@ -2559,6 +2560,31 @@ const EXPENSE_CATS = ['식비','교통','주거/관리비','쇼핑','의료','�
 let _txType = '수입', _fixedSubType = '수입', _curYear = new Date().getFullYear(), _curMonth = new Date().getMonth() + 1;
 let _lastMacro = null;
 
+/* ── 가계부 기준일(월급날) — payday=1 이면 달력 월과 동일 ── */
+let PAYDAY = 1, _paydayLoaded = false;
+async function ensurePayday(){
+  if (_paydayLoaded) return;
+  try { const p = await api('/api/settings/payday'); PAYDAY = p.payday || 1; } catch(e) {}
+  _paydayLoaded = true;
+}
+function periodAnchorJS(payday, refDate){
+  const y = refDate.getFullYear(), m = refDate.getMonth() + 1, d = refDate.getDate();
+  if (payday <= 1 || d >= payday) return { year: y, month: m };
+  const pm = m > 1 ? m - 1 : 12, py = m > 1 ? y : y - 1;
+  return { year: py, month: pm };
+}
+function periodRangeJS(payday, year, month){
+  const start = new Date(year, month - 1, Math.max(1, payday));
+  const end = new Date(year, month, Math.max(1, payday));   // 다음달 기준일 (월 인자가 1-indexed 값 그대로라 자동으로 다음달이 됨)
+  end.setDate(end.getDate() - 1);                             // 포함 종료일
+  return { start, end };
+}
+function periodLabelJS(payday, year, month){
+  if (payday <= 1) return `${year}.${String(month).padStart(2, '0')}`;
+  const { start, end } = periodRangeJS(payday, year, month);
+  return `${start.getMonth() + 1}.${start.getDate()} ~ ${end.getMonth() + 1}.${end.getDate()}`;
+}
+
 function setTxType(type){
   _txType = type;
   const isFixed = type === '고정';
@@ -2583,8 +2609,31 @@ document.addEventListener('DOMContentLoaded', () => {
   if (dayEl && preview) dayEl.addEventListener('input', () => { preview.textContent = dayEl.value || '?'; });
 });
 function updateMonthLabel(){
-  document.getElementById('month-label').textContent = `${_curYear}.${String(_curMonth).padStart(2,'0')}`;
-  document.getElementById('cat-month').textContent = `${_curYear}.${String(_curMonth).padStart(2,'0')}`;
+  const label = periodLabelJS(PAYDAY, _curYear, _curMonth);
+  document.getElementById('month-label').textContent = label;
+  document.getElementById('cat-month').textContent = label;
+  renderPaydaySelect();
+}
+function renderPaydaySelect(){
+  const sel = document.getElementById('payday-select');
+  if (!sel) return;
+  if (!sel.options.length){
+    sel.innerHTML = `<option value="1">달력 월 기준</option>` +
+      Array.from({ length: 27 }, (_, i) => i + 2).map(d => `<option value="${d}">매월 ${d}일 기준</option>`).join('');
+  }
+  sel.value = String(PAYDAY);
+}
+async function changePaydaySetting(){
+  const day = parseInt(document.getElementById('payday-select').value, 10) || 1;
+  try {
+    await api('/api/settings/payday', { method: 'POST', body: JSON.stringify({ payday: day }) });
+    PAYDAY = day;
+    const anchor = periodAnchorJS(PAYDAY, new Date());
+    _curYear = anchor.year; _curMonth = anchor.month;
+    updateMonthLabel();
+    toast(`가계부 기준이 ${day === 1 ? '달력 월' : '매월 ' + day + '일'}로 바뀌었습니다`);
+    await Promise.all([loadSummary(), loadTxList()]);
+  } catch(e){ toast(e.message, 'err'); }
 }
 function shiftMonth(d){
   _curMonth += d;
@@ -2595,7 +2644,9 @@ function shiftMonth(d){
 async function loadFinance(){
   const t = new Date();
   if (!document.getElementById('tx-date').value){
-    _curYear = t.getFullYear(); _curMonth = t.getMonth() + 1;
+    await ensurePayday();
+    const anchor = periodAnchorJS(PAYDAY, t);
+    _curYear = anchor.year; _curMonth = anchor.month;
     document.getElementById('tx-date').value = t.toISOString().slice(0, 10);
     setTxType('수입');
   }
@@ -4218,6 +4269,11 @@ async function mbAssets(){
       ['저축률', saveRate != null ? saveRate.toFixed(1) + '%' : '—', 'var(--ink)'],
     ];
 
+    // 가계부 기준일(월급날) — /api/ledger/summary(무파라미터)가 이미 "이번 주기"를 계산해서 준다
+    if (led){ PAYDAY = led.payday || 1; _paydayLoaded = true; }
+    MB._txAnchor = led ? { year: led.year, month: led.month } : periodAnchorJS(PAYDAY, new Date());
+    const txSecLabel = PAYDAY > 1 ? `${periodLabelJS(PAYDAY, MB._txAnchor.year, MB._txAnchor.month)} 가계부` : '이번 달 가계부';
+
     const held = MB.pfList.filter(p => (p.quantity || 0) > 0).sort((a, b) => (b.current_value || 0) - (a.current_value || 0));
     const stockVal = held.reduce((s, p) => s + (p.current_value || 0), 0);
     const stockCost = held.reduce((s, p) => s + (p.cost || 0), 0);
@@ -4259,7 +4315,7 @@ async function mbAssets(){
         <div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:700;color:var(--warn);letter-spacing:-.02em">리스크 경고 ${risks.length}건</div>
         <div style="font-size:12.5px;color:var(--sub);line-height:1.5;margin-top:1px">${risks.map(esc).join(' · ')}</div></div>
       </div></div>` : ''}
-      <div class="m-sec"><b>이번 달 가계부</b><a onclick="mbOpenAddTxSheet()">+ 추가</a></div>
+      <div class="m-sec"><b>${esc(txSecLabel)}</b><a onclick="mbOpenPaydaySheet()" style="color:var(--mute)">⚙ 기준일</a><a onclick="mbOpenAddTxSheet()">+ 추가</a></div>
       <div id="m-fixed-chips-wrap" style="display:none;padding:0 20px 8px">
         <div id="m-fixed-chips" style="display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px"></div>
       </div>
@@ -4371,9 +4427,9 @@ async function mbLoadRebalance(){
 async function mbLoadTx(){
   const box = document.getElementById('m-tx');
   if (!box) return;
-  const now = new Date();
+  const anchor = MB._txAnchor || periodAnchorJS(PAYDAY, new Date());
   try {
-    const list = await api(`/api/ledger/transactions?year=${now.getFullYear()}&month=${now.getMonth() + 1}`);
+    const list = await api(`/api/ledger/transactions?year=${anchor.year}&month=${anchor.month}`);
     MB._txList = list || [];
     const rows = MB._txList;
     box.innerHTML = rows.length ? `<div style="max-height:340px;overflow-y:auto">` + rows.map((t, i, a) => {
@@ -4428,6 +4484,30 @@ async function mbApplyFixedItem(id){
   try {
     await api('/api/ledger/transactions', { method: 'POST', body: JSON.stringify({ date: dateStr, type: r.type, category: r.category, amount: r.amount, memo }) });
     toast(`${memo} ${Number(r.amount).toLocaleString('ko-KR')}원 추가됨`);
+    if (MB.view === 'assets') mbAssets();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ── 가계부 기준일(월급날) 설정 ── */
+function mbOpenPaydaySheet(){
+  mbOpenSheet(`
+    <div style="font-size:18px;font-weight:700;letter-spacing:-.025em;margin-bottom:10px">가계부 기준일</div>
+    <div style="font-size:12.5px;color:var(--mute);line-height:1.5;margin-bottom:14px">월급날을 선택하면 그 날짜부터 다음달 같은 날 전날까지를 "한 달"로 계산합니다. 예: 25일 선택 시 9.25~10.24 이 한 주기.</div>
+    <select class="m-inp" id="m-payday-select" style="margin-bottom:14px">
+      <option value="1">달력 월 기준 (1일~말일)</option>
+      ${Array.from({ length: 27 }, (_, i) => i + 2).map(d => `<option value="${d}">매월 ${d}일 기준</option>`).join('')}
+    </select>
+    <button class="m-btn-primary" onclick="mbSavePayday()">저장</button>
+  `);
+  setTimeout(() => { const s = document.getElementById('m-payday-select'); if (s) s.value = String(PAYDAY); }, 30);
+}
+async function mbSavePayday(){
+  const day = parseInt(document.getElementById('m-payday-select').value, 10) || 1;
+  try {
+    await api('/api/settings/payday', { method: 'POST', body: JSON.stringify({ payday: day }) });
+    PAYDAY = day;
+    toast(`가계부 기준이 ${day === 1 ? '달력 월' : '매월 ' + day + '일'}로 바뀌었습니다`);
+    mbCloseSheet();
     if (MB.view === 'assets') mbAssets();
   } catch (e) { toast(e.message, 'err'); }
 }

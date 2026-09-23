@@ -22,6 +22,7 @@ from app.config import settings
 from app.db.client import get_session_factory
 from app.db.models import (
     AnalysisReport,
+    AppSetting,
     AssetItem,
     LedgerTransaction,
     NetWorthSnapshot,
@@ -1016,6 +1017,10 @@ async def run_brief_now(background_tasks: BackgroundTasks) -> dict:
 
 
 # ── 가계부 API ─────────────────────────────────────────────────────────────────
+#
+# 가계부의 "한 달"은 달력 월(1일~말일)이 아니라 급여일(payday) 기준일 수 있다.
+# payday=25 라면 9/25~10/24 가 "9월" 한 주기 — 9월 고정지출이 10월 날짜에
+# 찍혀도 10/24까지는 같은 주기에 남는다. payday=1(기본값)이면 달력 월과 동일.
 
 class LedgerCreate(BaseModel):
     date: str       # YYYY-MM-DD
@@ -1039,18 +1044,73 @@ class AssetUpdate(BaseModel):
     note: str | None = None
 
 
+class PaydaySet(BaseModel):
+    payday: int   # 1~28
+
+
+def _get_payday() -> int:
+    with _session() as session:
+        row = session.query(AppSetting).filter_by(key="ledger_payday").first()
+        if not row:
+            return 1
+        try:
+            return max(1, min(28, int(row.value)))
+        except (TypeError, ValueError):
+            return 1
+
+
+def _pay_period(payday: int, year: int, month: int) -> tuple[str, str]:
+    """payday 기준 주기의 [시작일, 종료일) — 종료일 자체는 다음 주기 첫날(미포함)."""
+    from datetime import date as _date
+    from calendar import monthrange
+
+    payday = max(1, min(28, payday))
+    start = _date(year, month, min(payday, monthrange(year, month)[1]))
+    ny, nm = (year, month + 1) if month < 12 else (year + 1, 1)
+    end = _date(ny, nm, min(payday, monthrange(ny, nm)[1]))
+    return start.isoformat(), end.isoformat()
+
+
+def _current_period_anchor(payday: int) -> tuple[int, int]:
+    """오늘이 속한 주기의 기준 (year, month) — payday 이전이면 지난달이 기준."""
+    from datetime import date as _date
+    from calendar import monthrange
+
+    today = _date.today()
+    if today.day >= min(payday, monthrange(today.year, today.month)[1]):
+        return today.year, today.month
+    pm, py = (today.month - 1, today.year) if today.month > 1 else (12, today.year - 1)
+    return py, pm
+
+
+@app.get("/api/settings/payday")
+async def get_payday() -> dict:
+    return {"payday": _get_payday()}
+
+
+@app.post("/api/settings/payday")
+async def set_payday(body: PaydaySet) -> dict:
+    day = max(1, min(28, body.payday))
+    with _session() as session:
+        row = session.query(AppSetting).filter_by(key="ledger_payday").first()
+        if row:
+            row.value = str(day)
+        else:
+            session.add(AppSetting(key="ledger_payday", value=str(day)))
+        session.commit()
+    return {"payday": day}
+
+
 @app.get("/api/ledger/transactions")
 async def list_transactions(year: int | None = None, month: int | None = None) -> list[dict]:
-    from datetime import date as _date
-    today = _date.today()
-    y = year or today.year
-    m = month or today.month
-    prefix = f"{y:04d}-{m:02d}"
+    payday = _get_payday()
+    y, m = (year, month) if (year and month) else _current_period_anchor(payday)
+    start, end = _pay_period(payday, y, m)
 
     with _session() as session:
         rows = (
             session.query(LedgerTransaction)
-            .filter(LedgerTransaction.date.startswith(prefix))
+            .filter(LedgerTransaction.date >= start, LedgerTransaction.date < end)
             .order_by(LedgerTransaction.date.desc(), LedgerTransaction.created_at.desc())
             .all()
         )
@@ -1095,29 +1155,26 @@ async def delete_transaction(tx_id: int) -> dict:
 
 @app.get("/api/ledger/summary")
 async def ledger_summary(year: int | None = None, month: int | None = None) -> dict:
-    """월별 수입/지출 합계 + 카테고리별 집계."""
-    from datetime import date as _date
+    """급여주기(payday) 기준 수입/지출 합계 + 카테고리별 집계. payday=1이면 달력 월과 동일."""
     from collections import defaultdict
-    today = _date.today()
-    y = year or today.year
-    m = month or today.month
-    prefix = f"{y:04d}-{m:02d}"
 
-    # 이전 달 계산
-    prev_m = m - 1 if m > 1 else 12
-    prev_y = y if m > 1 else y - 1
-    prev_prefix = f"{prev_y:04d}-{prev_m:02d}"
+    payday = _get_payday()
+    y, m = (year, month) if (year and month) else _current_period_anchor(payday)
+    start, end = _pay_period(payday, y, m)
+
+    prev_m, prev_y = (m - 1, y) if m > 1 else (12, y - 1)
+    prev_start, prev_end = _pay_period(payday, prev_y, prev_m)
 
     with _session() as session:
-        def month_rows(pfx: str):
+        def period_rows(start_d: str, end_d: str):
             return (
                 session.query(LedgerTransaction)
-                .filter(LedgerTransaction.date.startswith(pfx))
+                .filter(LedgerTransaction.date >= start_d, LedgerTransaction.date < end_d)
                 .all()
             )
 
-        curr = month_rows(prefix)
-        prev = month_rows(prev_prefix)
+        curr = period_rows(start, end)
+        prev = period_rows(prev_start, prev_end)
 
         def agg(rows):
             income = sum(r.amount for r in rows if r.type == "수입")
@@ -1128,8 +1185,13 @@ async def ledger_summary(year: int | None = None, month: int | None = None) -> d
                     by_cat[r.category] += r.amount
             return {"income": income, "expense": expense, "by_category": dict(by_cat)}
 
+        from datetime import date as _date, timedelta as _td
+        end_inclusive = (_date.fromisoformat(end) - _td(days=1)).isoformat()
+
         return {
             "year": y, "month": m,
+            "payday": payday, "period_start": start, "period_end": end,
+            "period_end_inclusive": end_inclusive,
             "current": agg(curr),
             "previous": agg(prev),
         }
