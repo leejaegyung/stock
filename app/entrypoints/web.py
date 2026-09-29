@@ -1493,7 +1493,10 @@ def _batch_prices(items: list[tuple]) -> dict:
     """관심목록 시세 배치 조회.
 
     1) 일봉 1개월 다운로드 → 전일종가·스파크라인, 장 마감 시 현재가
-    2) 1분봉 당일 다운로드 → 장중 현재가로 덮어씀 (yfinance 기준 ≈15분 지연)
+    2) 1분봉 당일 다운로드(prepost=True) → 장중은 물론 프리·애프터마켓 체결가로도
+       덮어씀 (yfinance 기준 ≈15분 지연). prepost 없이는 정규장 마감 직후부터
+       다음 개장 전까지 몇 시간 동안 마감가가 그대로 굳어 "실시간과 다르다"는
+       문제가 생긴다 — 한국 시장(.KS)은 애프터마켓 데이터가 없으면 그냥 무시됨.
     """
     import yfinance as yf
     from concurrent.futures import ThreadPoolExecutor
@@ -1540,7 +1543,7 @@ def _batch_prices(items: list[tuple]) -> dict:
         try:
             df = yf.download(
                 syms, period="1d", interval="1m", progress=False,
-                group_by="ticker", threads=True, auto_adjust=False,
+                group_by="ticker", threads=True, auto_adjust=False, prepost=True,
             )
             multi = hasattr(df.columns, "levels")
             for s in syms:
