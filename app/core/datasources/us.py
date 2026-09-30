@@ -120,6 +120,8 @@ class USDataSource(DataSourceBase):
                 "numberOfAnalystOpinions", "recommendationMean", "recommendationKey",
                 "targetMeanPrice", "targetHighPrice", "targetLowPrice",
                 "pegRatio", "trailingPegRatio", "earningsQuarterlyGrowth",
+                # 애널리스트 커버리지 없는 소형주·ADR용 대체 외부검증 신호
+                "heldPercentInstitutions",
             ]
         }
         # yfinance ≥0.2.5x: dividendYield가 이미 퍼센트(예: 2.31)로 옴 → 소수(0.0231)로 정규화

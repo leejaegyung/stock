@@ -30,9 +30,21 @@ def _dir_signals(dim_scores: dict) -> list[float]:
 
 
 def _external_factor(verdict: str | None, analyst: dict | None) -> tuple[int, str | None]:
-    """월가 컨센서스와 알고 결론의 일치도 → 0~14점 + 근거 문장."""
+    """월가 컨센서스와 알고 결론의 일치도 → 0~14점 + 근거 문장.
+
+    애널리스트 커버리지가 부족하면(n<3 — 소형주·해외 ADR에 흔함) 정식
+    컨센서스 대신 기관투자자 보유 비중(inst_pct)을 약한 대체 신호로 쓴다.
+    정식 컨센서스만큼 신뢰하기 어려워 상한을 8점으로 낮춰 둔다.
+    """
     if not analyst or (analyst.get("n") or 0) < 3:
-        return 5, None  # 애널리스트 커버리지 없음 — 중립
+        inst = (analyst or {}).get("inst_pct")
+        if inst is None:
+            return 5, None  # 대체 신호도 없음 — 완전 중립
+        if inst >= 50:
+            return 8, f"애널리스트 커버리지는 없지만 기관투자자 보유 비중 {inst:.0f}% — 어느 정도 시장 신뢰 확인"
+        if inst >= 25:
+            return 6, f"애널리스트 커버리지 없음 — 기관투자자 보유 비중 {inst:.0f}%로 약한 대체 검증"
+        return 3, f"애널리스트 커버리지 없음 + 기관투자자 보유 비중도 낮음({inst:.0f}%) — 외부 검증 취약"
 
     n = int(analyst.get("n") or 0)
     rm = analyst.get("rec_mean")        # 1(강력매수) ~ 5(강력매도)
@@ -224,7 +236,9 @@ def analysis_confidence(
     }
 
 
-def improvement_hints(conf: dict, coverage: dict, news_count: int, market: str) -> list[str]:
+def improvement_hints(
+    conf: dict, coverage: dict, news_count: int, market: str, analyst: dict | None = None,
+) -> list[str]:
     """확신도를 높이려면 무엇을 하면 되는지 실행 가능한 제안."""
     hints: list[str] = []
     if news_count < 3:
@@ -236,7 +250,14 @@ def improvement_hints(conf: dict, coverage: dict, news_count: int, market: str) 
     if not coverage.get("has_ma200"):
         hints.append("상장 1년 미만 — 장기 추세 판단이 어려우니 비중을 보수적으로.")
     if int(coverage.get("n_analysts") or 0) < 3:
-        hints.append("애널리스트 커버리지가 없어 외부 검증이 약합니다 (소형주·해외 ADR).")
+        inst = (analyst or {}).get("inst_pct")
+        if inst is None:
+            hints.append("애널리스트 커버리지가 없어 외부 검증이 약합니다 (소형주·해외 ADR). "
+                         "기관투자자 보유 비중 데이터도 없어 대체 검증도 어렵습니다.")
+        elif inst < 25:
+            hints.append(f"애널리스트 커버리지가 없고 기관투자자 보유 비중도 {inst:.0f}%로 낮아 "
+                         "외부 검증이 약합니다 (소형주·해외 ADR) — 공시·뉴스로 직접 확인하세요.")
+        # inst_pct >= 25면 이미 reasons에 대체 검증 근거가 표시되므로 별도 힌트 생략
     if any("상반" in r for r in conf.get("reasons", [])):
         hints.append("월가 컨센서스와 결론이 엇갈립니다 — 반대 논거를 한 번 더 점검하세요.")
     if any("경계선" in r for r in conf.get("reasons", [])):

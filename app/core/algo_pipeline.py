@@ -298,16 +298,23 @@ def _mv(macro: dict, key: str) -> float | None:
 
 
 def _analyst_consensus(info: dict, price: float | None) -> dict:
-    """yfinance info → 월가 컨센서스 요약 (확신도 외부 검증용)."""
+    """yfinance info → 월가 컨센서스 요약 (확신도 외부 검증용).
+
+    inst_pct(기관투자자 보유 비중)는 애널리스트 커버리지가 없는 소형주·해외
+    ADR에서 대신 쓸 수 있는 대체 외부검증 신호 — 커버리지 여부와 무관하게
+    항상 채워둔다 (confidence.py 쪽에서 커버리지 없을 때만 실제로 사용).
+    """
     n = int(info.get("numberOfAnalystOpinions") or 0)
     rec = info.get("recommendationMean")
     tgt = info.get("targetMeanPrice")
     hi, lo = info.get("targetHighPrice"), info.get("targetLowPrice")
+    inst = info.get("heldPercentInstitutions")
     out: dict = {
         "n": n,
         "rec_mean": round(float(rec), 2) if rec else None,
         "rec_key": info.get("recommendationKey"),
         "target_mean": round(float(tgt), 2) if tgt else None,
+        "inst_pct": round(float(inst) * 100, 1) if inst is not None else None,
     }
     if tgt and price:
         out["target_gap_pct"] = round((float(tgt) / price - 1) * 100, 1)
@@ -751,7 +758,7 @@ def analyze_stock_algo(
         verdict=vd, analyst=analyst, vol_ratio=ta.get("vol_ratio"),
         track_record=track_record,
     )
-    conf["hints"] = improvement_hints(conf, coverage, len(news), market)
+    conf["hints"] = improvement_hints(conf, coverage, len(news), market, analyst=analyst)
     conf["analyst"] = analyst
     cf = conf["grade"]
 

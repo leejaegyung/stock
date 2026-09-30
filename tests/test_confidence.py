@@ -72,6 +72,35 @@ def test_analyst_alignment_raises_confidence():
     assert any("상반" in x for x in contra["reasons"])
 
 
+# ── 애널리스트 커버리지 없을 때 기관투자자 보유 비중을 대체 신호로 사용 ──
+
+def test_no_coverage_no_inst_data_stays_neutral():
+    r = _c(24, 30, 14, 4, analyst={"n": 1})
+    assert not any("기관투자자" in x for x in r["reasons"])
+
+
+def test_no_coverage_high_inst_pct_gives_partial_credit():
+    low_inst = _c(24, 30, 14, 4, analyst={"n": 1, "inst_pct": 10.0})
+    high_inst = _c(24, 30, 14, 4, analyst={"n": 1, "inst_pct": 65.0})
+    assert high_inst["score"] > low_inst["score"]
+    assert any("기관투자자 보유 비중 65%" in x for x in high_inst["reasons"])
+    assert any("취약" in x for x in low_inst["reasons"])
+
+
+def test_hints_skip_analyst_warning_when_inst_pct_sufficient():
+    low_cov = {**_FULL_COV, "n_analysts": 1}
+    conf = _c(24, 30, 14, 4, cov=low_cov, analyst={"n": 1, "inst_pct": 60.0})
+    hints = improvement_hints(conf, low_cov, 4, "US", analyst={"n": 1, "inst_pct": 60.0})
+    assert not any("소형주" in h for h in hints)
+
+
+def test_hints_warn_when_no_analyst_and_no_inst_data():
+    low_cov = {**_FULL_COV, "n_analysts": 1}
+    conf = _c(24, 30, 14, 4, cov=low_cov, analyst={"n": 1})
+    hints = improvement_hints(conf, low_cov, 4, "US", analyst={"n": 1})
+    assert any("소형주" in h for h in hints)
+
+
 def test_volume_confirmation_bonus():
     quiet = _c(26, 30, 14, 5, bulls=5, bears=1, vol_ratio=1.0)
     loud = _c(26, 30, 14, 5, bulls=5, bears=1, vol_ratio=1.6)
