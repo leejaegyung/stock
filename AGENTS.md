@@ -78,6 +78,14 @@ app/core/paper_trading.py        — 모의투자(가상 매매) 순수 함수 (
                                    /api/paper/status·run·reset, 스케줄러가 장중(미국·한국 중 한쪽이라도
                                    개장) 15분마다 자동 실행 — 사용자가 직접 실행하지 않아도 실시간
                                    가격으로 청산·신규 진입을 계속 추종한다. 두 시장 모두 마감이면 스킵.
+app/core/algo_pipeline.py        — LLM-free 알고리즘 분석 엔진 (실제 서비스가 쓰는 분석 경로 —
+                                   브리핑·재분석·자동발굴·뉴스 트리거 전부 이 경로, pipeline.py의
+                                   9-에이전트 LLM 경로는 CLI에서만 사용). 기술(0~30)·펀더멘털(0~40)·
+                                   거시(0~20)·뉴스(0~10) 4분야 점수 → 종합점수로 매수/추가매수/보유/매도
+                                   판정. 펀더멘털 P/E는 SPDR 섹터 ETF의 실시간 trailingPE를 "업종 평균"
+                                   근사치로 삼아 상대 비교(_sector_avg_pe, 24h 캐시) — 없으면 절대
+                                   컷오프로 대체. 각 분야 판정 근거(RSI·MACD·P/E·ROE 등 해석 문구)를
+                                   리포트의 기술적 지표/펀더멘털 섹션에 그대로 노출(t_notes/f_notes)
 app/db/models.py                 — Watchlist, AnalysisReport, NewsItem, PaperAccount, PaperTrade(모의투자),
                                    AppSetting(key-value 전역 설정 — 가계부 기준일 등)
 app/db/client.py                 — SQLite + WAL 모드

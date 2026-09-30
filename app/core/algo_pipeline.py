@@ -183,14 +183,23 @@ def _score_technical(ta: dict) -> tuple[int, list[str]]:
 
 # ── 4. 펀더멘털 점수 (0 ~ 40) ────────────────────────────────────────────────
 
-def _score_fundamental(fund: dict) -> tuple[int, list[str]]:
+def _score_fundamental(fund: dict, sector_pe: float | None = None) -> tuple[int, list[str]]:
     score = 0
     notes: list[str] = []
     info = fund.get("info", {})
 
-    # P/E (0-10)
+    # P/E (0-10) — 업종 평균 PER(섹터 ETF)을 구할 수 있으면 상대 비교,
+    # 없으면(KR·ETF·매핑 안 되는 섹터) 기존 절대 컷오프로 대체
     pe = info.get("trailingPE") or info.get("forwardPE")
-    if pe and pe > 0:
+    if pe and pe > 0 and sector_pe and sector_pe > 0:
+        ratio = pe / sector_pe
+        if   ratio < 0.7:  score += 10; notes.append(f"P/E {pe:.1f} — 업종 평균({sector_pe:.1f}) 대비 {ratio:.2f}배, 매우 저평가")
+        elif ratio < 0.9:  score += 8;  notes.append(f"P/E {pe:.1f} — 업종 평균({sector_pe:.1f}) 대비 {ratio:.2f}배, 저평가")
+        elif ratio < 1.1:  score += 6;  notes.append(f"P/E {pe:.1f} — 업종 평균({sector_pe:.1f}) 대비 {ratio:.2f}배, 업종 평균 수준")
+        elif ratio < 1.3:  score += 4;  notes.append(f"P/E {pe:.1f} — 업종 평균({sector_pe:.1f}) 대비 {ratio:.2f}배, 다소 고평가")
+        elif ratio < 1.6:  score += 2;  notes.append(f"P/E {pe:.1f} — 업종 평균({sector_pe:.1f}) 대비 {ratio:.2f}배, 고평가")
+        else:              score += 0;  notes.append(f"P/E {pe:.1f} — 업종 평균({sector_pe:.1f}) 대비 {ratio:.2f}배, 매우 고평가")
+    elif pe and pe > 0:
         if   pe < 10:  score += 10; notes.append(f"P/E {pe:.1f} — 매우 저평가")
         elif pe < 15:  score += 8;  notes.append(f"P/E {pe:.1f} — 저평가")
         elif pe < 20:  score += 6;  notes.append(f"P/E {pe:.1f} — 적정")
@@ -297,6 +306,61 @@ def _mv(macro: dict, key: str) -> float | None:
     return None
 
 
+# ── 업종 상대 밸류에이션 — 절대 PER 컷오프 대신 업종 평균과 비교 ──────────────
+#
+# yfinance의 sector(GICS 대분류)를 SPDR 섹터 ETF에 매핑해, 그 ETF 자체의
+# trailingPE를 "업종 평균 PER" 근사치로 쓴다 — 개별 종목 수백 개를 모아 평균
+# 내는 대신 이미 시가총액 가중 평균이 계산되어 있는 ETF의 PER을 그대로
+# 재사용하는 것 (추가 API 호출 1건, 24시간 캐시).
+#
+# 업종 평균 ROE는 실시간으로 구하기 어려워(ETF는 ROE를 보고하지 않음),
+# 장기 평균값에 대한 통상적 근사치를 고정 테이블로 둔다 — 참고용 상대비교
+# 목적이며 "업종 평균 ROE"를 정밀하게 주장하는 것은 아니다.
+_SECTOR_TO_ETF: dict[str, str] = {
+    "Technology": "XLK",
+    "Communication Services": "XLC",
+    "Consumer Cyclical": "XLY",
+    "Consumer Defensive": "XLP",
+    "Healthcare": "XLV",
+    "Financial Services": "XLF",
+    "Financial": "XLF",
+    "Industrials": "XLI",
+    "Energy": "XLE",
+    "Basic Materials": "XLB",
+    "Real Estate": "XLRE",
+    "Utilities": "XLU",
+}
+_SECTOR_AVG_ROE: dict[str, float] = {
+    "Technology": 25.0, "Communication Services": 15.0, "Consumer Cyclical": 18.0,
+    "Consumer Defensive": 20.0, "Healthcare": 18.0, "Financial Services": 12.0,
+    "Financial": 12.0, "Industrials": 16.0, "Energy": 10.0, "Basic Materials": 12.0,
+    "Real Estate": 8.0, "Utilities": 10.0,
+}
+_sector_pe_cache: dict[str, tuple[float, float]] = {}
+_SECTOR_PE_TTL = 24 * 3600
+
+
+def _sector_avg_pe(sector: str | None) -> float | None:
+    """섹터 SPDR ETF의 trailingPE를 업종 평균 PER 근사치로 (24h 캐시, 실패 시 None)."""
+    etf = _SECTOR_TO_ETF.get(sector or "")
+    if not etf:
+        return None
+    import time as _time
+    now = _time.time()
+    hit = _sector_pe_cache.get(etf)
+    if hit and now - hit[0] < _SECTOR_PE_TTL:
+        return hit[1]
+    try:
+        import yfinance as yf
+        pe = yf.Ticker(etf).info.get("trailingPE")
+        if pe:
+            _sector_pe_cache[etf] = (now, float(pe))
+            return float(pe)
+    except Exception as e:
+        logger.debug("sector PE fetch failed (%s): %s", etf, e)
+    return hit[1] if hit else None
+
+
 def _analyst_consensus(info: dict, price: float | None) -> dict:
     """yfinance info → 월가 컨센서스 요약 (확신도 외부 검증용).
 
@@ -389,7 +453,7 @@ def _score_news(news_items: list[dict]) -> tuple[int, list[str]]:
 
 # ── 7. Bull / Bear 신호 추출 ─────────────────────────────────────────────────
 
-def _bull_signals(ta: dict, fund: dict, macro: dict) -> list[str]:
+def _bull_signals(ta: dict, fund: dict, macro: dict, sector_pe: float | None = None) -> list[str]:
     sigs: list[str] = []
     info = fund.get("info", {})
 
@@ -407,7 +471,9 @@ def _bull_signals(ta: dict, fund: dict, macro: dict) -> list[str]:
     roe = info.get("returnOnEquity")
     div = info.get("dividendYield")
 
-    if pe and 0 < pe < 15:
+    if pe and sector_pe and pe < sector_pe * 0.7:
+        sigs.append(f"P/E {pe:.1f} — 업종 평균({sector_pe:.1f}) 대비 저평가")
+    elif pe and not sector_pe and 0 < pe < 15:
         sigs.append(f"P/E {pe:.1f} — 저평가 밸류에이션")
     if roe and roe > 0.20:
         sigs.append(f"ROE {roe*100:.1f}% — 높은 자본 수익성")
@@ -423,7 +489,7 @@ def _bull_signals(ta: dict, fund: dict, macro: dict) -> list[str]:
     return sigs
 
 
-def _bear_signals(ta: dict, fund: dict, macro: dict) -> list[str]:
+def _bear_signals(ta: dict, fund: dict, macro: dict, sector_pe: float | None = None) -> list[str]:
     sigs: list[str] = []
     info = fund.get("info", {})
 
@@ -442,7 +508,9 @@ def _bear_signals(ta: dict, fund: dict, macro: dict) -> list[str]:
     margin = info.get("profitMargins")
     eg = info.get("earningsGrowth")
 
-    if pe and pe > 35:
+    if pe and sector_pe and pe > sector_pe * 1.6:
+        sigs.append(f"P/E {pe:.1f} — 업종 평균({sector_pe:.1f}) 대비 고평가 위험")
+    elif pe and not sector_pe and pe > 35:
         sigs.append(f"P/E {pe:.1f} — 고평가 위험")
     if de and de > 200:
         sigs.append(f"부채비율 {de:.0f}% — 재무 레버리지 위험")
@@ -464,7 +532,9 @@ def _bear_signals(ta: dict, fund: dict, macro: dict) -> list[str]:
 
 # ── 8. 계량 검증 §4.1-4.5 ────────────────────────────────────────────────────
 
-def _quant_metrics(ts: int, fs: int, ms: int, fund: dict, macro: dict) -> dict:
+def _quant_metrics(
+    ts: int, fs: int, ms: int, fund: dict, macro: dict, sector_pe: float | None = None,
+) -> dict:
     """
     §4.1 기대값, §4.2 하프켈리, §4.3 현금흐름 패턴, §4.4 CAPE, §4.5 PER/ROE.
     승률·손익비는 추정치임을 명시 (STOCK_ANALYST_SERVICE.md §4.2 주의).
@@ -483,13 +553,20 @@ def _quant_metrics(ts: int, fs: int, ms: int, fund: dict, macro: dict) -> dict:
     hk  = half_kelly(win_prob, exp_gain / exp_loss)
     hk  = max(0.0, min(hk, 0.25))        # 최대 25% 캡
 
-    # §4.5 밸류에이션
+    # §4.5 밸류에이션 — 업종 평균 PER(섹터 ETF)·업종 평균 ROE(근사 테이블)와
+    # 실제로 비교한다. 둘 다 못 구하면(KR·매핑 안 되는 섹터) 생략 —
+    # 예전처럼 종목 자신의 PER×1.1/ROE×0.9와 비교하는 항상-참인 비교는 하지 않는다.
     info = fund.get("info", {})
     pe   = info.get("trailingPE") or info.get("forwardPE")
     roe  = info.get("returnOnEquity")
+    sector = info.get("sector")
+    sector_roe = _SECTOR_AVG_ROE.get(sector or "")
     val_parts: list[str] = []
-    if pe and roe:
-        val_parts.append(per_roe_judgment(pe, roe * 100, pe * 1.1, roe * 90))
+    if pe and roe and sector_pe and sector_roe:
+        val_parts.append(
+            f"{per_roe_judgment(pe, roe * 100, sector_pe, sector_roe)} "
+            f"(업종 평균 PER {sector_pe:.1f} · ROE {sector_roe:.0f}%)"
+        )
     cape_val = _mv(macro, "CAPE")
     if cape_val:
         val_parts.append(f"시장 CAPE {cape_val:.1f}: {cape_judgment(cape_val)}")
@@ -539,6 +616,8 @@ def _stock_report_md(
     held: bool = True,
     pattern: dict | None = None,
     breakout: dict | None = None,
+    t_notes: list[str] | None = None,
+    f_notes: list[str] | None = None,
 ) -> str:
     total = ts + fs + ms + ns
     vd, _band_cf = _verdict(total)
@@ -584,6 +663,8 @@ def _stock_report_md(
         if ta.get("ret_3m") is not None:  rets.append(f"3M {ta['ret_3m']:+.1f}%")
         if ta.get("ret_6m") is not None:  rets.append(f"6M {ta['ret_6m']:+.1f}%")
         if rets:  L.append(f"- 수익률: {' / '.join(rets)}")
+        for note in (t_notes or []):
+            L.append(f"  - {note}")
         L.append("")
 
     # 차트 패턴 (Lo·Mamaysky·Wang 2000 / Brock·Lakonishok·LeBaron 1992 근사 구현)
@@ -617,6 +698,8 @@ def _stock_report_md(
     if eg:   parts.append(f"이익성장 {eg*100:.1f}%")
     if div:  parts.append(f"배당 {div*100:.2f}%")
     L.append(f"- {' | '.join(parts)}" if parts else "- 재무 지표 미수신")
+    for note in (f_notes or []):
+        L.append(f"  - {note}")
     if quant.get("cashflow_pattern"):
         L.append(f"- 현금흐름 패턴: {quant['cashflow_pattern']}")
     an = (conf or {}).get("analyst") or {}
@@ -706,10 +789,13 @@ def analyze_stock_algo(
     macro  = raw.get("macro", {})
     df     = raw.get("price", pd.DataFrame())
 
+    # 업종 평균 PER(섹터 ETF) — 펀더멘털 점수·신호·밸류에이션 판정에서 공유
+    sector_pe = _sector_avg_pe((fund.get("info") or {}).get("sector"))
+
     # Layer 1 — 4개 분야 점수
     ta               = _technical_indicators(df)
     ts, t_notes      = _score_technical(ta)
-    fs, f_notes      = _score_fundamental(fund)
+    fs, f_notes      = _score_fundamental(fund, sector_pe=sector_pe)
     ms, m_notes      = _score_macro(macro)
     ns, news_lines   = _score_news(news)
 
@@ -727,8 +813,8 @@ def analyze_stock_algo(
     vd, _band_cf = _verdict(total)
 
     # Layer 2 — Bull / Bear 신호
-    bulls = _bull_signals(ta, fund, macro)
-    bears = _bear_signals(ta, fund, macro)
+    bulls = _bull_signals(ta, fund, macro, sector_pe=sector_pe)
+    bears = _bear_signals(ta, fund, macro, sector_pe=sector_pe)
     for sig, tag in ((pattern, "차트 패턴"), (breakout, "돌파")):
         if not sig:
             continue
@@ -739,7 +825,7 @@ def analyze_stock_algo(
             bears = bears + [label]
 
     # Layer 3 — 계량 검증 (§4)
-    quant = _quant_metrics(ts, fs, ms, fund, macro)
+    quant = _quant_metrics(ts, fs, ms, fund, macro, sector_pe=sector_pe)
 
     # Layer 3b — 확신도 (커버리지 · 신호 일치 · 우위 · 경계선 · 뉴스 · 외부검증)
     _info = fund.get("info", {}) or {}
@@ -774,6 +860,7 @@ def analyze_stock_algo(
         ts, fs, ms, ns,
         bulls, bears, quant, news_lines, conf, tplan,
         held=held, pattern=pattern, breakout=breakout,
+        t_notes=t_notes, f_notes=f_notes,
     )
 
     key_reasons = (bulls if vd in ("매수", "추가매수") else bears)[:3]
