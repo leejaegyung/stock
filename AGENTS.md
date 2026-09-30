@@ -82,15 +82,27 @@ app/core/algo_pipeline.py        — LLM-free 알고리즘 분석 엔진 (실제
                                    브리핑·재분석·자동발굴·뉴스 트리거 전부 이 경로, pipeline.py의
                                    9-에이전트 LLM 경로는 CLI에서만 사용). 기술(0~30)·펀더멘털(0~40)·
                                    거시(0~20)·뉴스(0~10) 4분야 점수 → 종합점수로 매수/추가매수/보유/매도
-                                   판정. 펀더멘털 P/E는 SPDR 섹터 ETF의 실시간 trailingPE를 "업종 평균"
-                                   근사치로 삼아 상대 비교(_sector_avg_pe, 24h 캐시) — 없으면 절대
-                                   컷오프로 대체. 각 분야 판정 근거(RSI·MACD·P/E·ROE 등 해석 문구)를
-                                   리포트의 기술적 지표/펀더멘털 섹션에 그대로 노출(t_notes/f_notes)
+                                   판정. 업종 평균 PER·ROE 상대 비교 우선순위: ①ds.get_peers() 실제
+                                   동종업계 비교기업(최대 5개) 중앙값(_peer_sector_avg, US/KR 공통)
+                                   → ②(US만) SPDR 섹터 ETF trailingPE(_sector_avg_pe, 24h 캐시)
+                                   → ③ 절대 컷오프. 둘 다 없으면 밸류에이션 비교 생략(예전엔 종목
+                                   자신의 PER×1.1/ROE×0.9와 비교하는 항상-참인 버그가 있었음, 수정됨).
+                                   각 분야 판정 근거(RSI·MACD·P/E·ROE 등 해석 문구)를 리포트의
+                                   기술적 지표/펀더멘털 섹션에 그대로 노출(t_notes/f_notes)
 app/db/models.py                 — Watchlist, AnalysisReport, NewsItem, PaperAccount, PaperTrade(모의투자),
                                    AppSetting(key-value 전역 설정 — 가계부 기준일 등)
 app/db/client.py                 — SQLite + WAL 모드
-app/core/datasources/us.py       — yfinance 데이터소스 (US)
-app/core/datasources/kr.py       — pykrx + stub (KR, Phase 2에서 실연결)
+app/core/datasources/us.py       — yfinance 데이터소스 (US). get_peers(): 섹터별 하드코딩 대형주
+                                   최대 5개(_SECTOR_PEERS, 5개 섹터만 커버 — 매핑 안 되면 algo_pipeline의
+                                   섹터 ETF 폴백으로 넘어감)
+app/core/datasources/kr.py       — pykrx(시세·시가총액) + 네이버 증권 모바일 통합 API(PER·PBR·EPS·
+                                   배당수익률, ROE는 EPS/BPS 근사) + DART(재무제표, 키 설정 시).
+                                   get_peers(): 네이버 자체 업종 분류(industryCompareInfo)로 동일 업종
+                                   종목을 그때그때 조회 — 하드코딩 목록이 아니라 전 종목 커버.
+                                   ⚠ 예전엔 finance.naver.com PC 페이지를 정규식으로 스크래핑했는데
+                                   그 페이지가 Next.js SPA로 바뀌면서 서버 HTML에 실제 수치가 전혀
+                                   없어(클라이언트 JS가 채움) PER·ROE·배당이 항상 빈 값이었다 — 국내
+                                   종목 펀더멘털 스코어링이 사실상 계속 기본값으로만 채점되던 원인이었음
 app/core/agents/base.py          — BaseAgent 추상 클래스
 app/core/agents/fundamental.py   — FundamentalAnalyst (haiku)
 app/core/agents/news_sentiment.py — NewsSentimentAnalyst (haiku)

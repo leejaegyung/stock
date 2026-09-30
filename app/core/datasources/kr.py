@@ -3,10 +3,10 @@ KR market datasource — Phase 2 실연결.
 
 데이터 소스:
   - 시세·시가총액·거래량: pykrx (KRX 공식)
-  - PER·PBR·EPS·ROE·배당수익률: 네이버 금융 (PC 스크래핑)
+  - PER·PBR·EPS·배당수익률(ROE는 EPS/BPS 근사): 네이버 증권 모바일 통합 API (JSON)
   - 매출·영업이익 추이: 네이버 증권 모바일 API
   - 뉴스: 네이버 증권 모바일 API (JSON, 인증 불필요)
-  - 경쟁사 비교: 같은 섹터 종목 네이버 금융 반복 조회
+  - 경쟁사 비교: 네이버 자체 업종 분류(industryCompareInfo) 기반 동일 업종 종목 자동 조회
   - 거시(KOSPI·KOSDAQ): 네이버 증권 모바일 API
   - 재무제표 (손익·현금흐름): DART API (DART_API_KEY 설정 시 활성화)
 """
@@ -29,12 +29,9 @@ warnings.filterwarnings("ignore", category=UserWarning)
 logger = logging.getLogger(__name__)
 
 # ── 네이버 공통 ────────────────────────────────────────────────────────────────
+# PC 페이지(finance.naver.com)는 Next.js SPA라 서버 HTML에 실제 수치가 없어
+# 더 이상 스크래핑하지 않는다 — 전부 모바일 JSON API(m.stock.naver.com) 사용.
 
-_PC_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-    "Accept-Language": "ko-KR,ko;q=0.9",
-    "Referer": "https://finance.naver.com/",
-}
 _MOBILE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
@@ -54,17 +51,6 @@ _TICKER_TO_SECTOR: dict[str, str] = {
     "105560": "금융", "055550": "금융", "086790": "금융",
     "005490": "철강", "004020": "철강",
 }
-
-_KR_SECTOR_PEERS: dict[str, list[str]] = {
-    "반도체": ["005930", "000660", "042700"],
-    "자동차": ["005380", "000270", "012330"],
-    "2차전지": ["051910", "006400", "373220"],
-    "인터넷": ["035420", "035720", "259960"],
-    "바이오": ["068270", "207940"],
-    "금융": ["105560", "055550", "086790"],
-    "철강": ["005490", "004020"],
-}
-
 
 # ── 헬퍼 ──────────────────────────────────────────────────────────────────────
 
@@ -137,37 +123,58 @@ def _latest_trading_date(lookback: int = 7) -> str:
     return (date.today() - timedelta(days=1)).strftime("%Y%m%d")
 
 
-def _naver_ratios(ticker: str) -> dict:
+def _naver_integration(ticker: str) -> dict:
     """
-    네이버 금융 PC 페이지에서 PER·PBR·EPS·ROE·배당수익률을 추출.
-    이 데이터는 pykrx보다 안정적으로 제공됨.
+    네이버 증권 모바일 통합 정보 API에서 PER·PBR·EPS·배당수익률 + 같은 업종
+    비교 기업(industryCompareInfo, 네이버 자체 업종 분류 기준)을 가져온다.
+
+    예전엔 PC 페이지(finance.naver.com)를 정규식으로 스크래핑했는데, 그 페이지가
+    Next.js SPA로 바뀌면서 실제 수치가 서버 HTML에 전혀 없어(클라이언트 JS가
+    채워 넣음) 정규식이 항상 빈 결과만 돌려주고 있었다 — PER/ROE/배당 스코어링이
+    사실상 계속 "데이터 없음" 취급되던 원인. 모바일 API는 JSON이라 안정적이다.
+
+    ROE는 이 API가 직접 주지 않아 EPS/BPS로 근사한다 (지배주주 ROE의 정확한
+    정의와는 다를 수 있음 — 근사치로 취급).
     """
     try:
         with httpx.Client(timeout=10, follow_redirects=True) as client:
             r = client.get(
-                "https://finance.naver.com/item/main.naver",
-                params={"code": ticker},
-                headers=_PC_HEADERS,
+                f"https://m.stock.naver.com/api/stock/{ticker}/integration",
+                headers=_MOBILE_HEADERS,
             )
             r.raise_for_status()
+            data = r.json()
 
-        text = r.text
-        result: dict = {}
-        patterns = {
-            "per":  r"PER\(배\).*?<td[^>]*>\s*([\d,\.]+)",
-            "pbr":  r"PBR\(배\).*?<td[^>]*>\s*([\d,\.]+)",
-            "eps":  r"EPS\(원\).*?<td[^>]*>\s*([\d,\-]+)",
-            "roe":  r"ROE\(지배주주\).*?<td[^>]*>\s*([\d\.\-]+)",
-            "div":  r"배당금\(원\).*?<td[^>]*>\s*([\d,]+)",
+        info_map = {i["code"]: i.get("value") for i in (data.get("totalInfos") or []) if i.get("code")}
+
+        def _num(code: str) -> Optional[float]:
+            v = info_map.get(code)
+            if not v:
+                return None
+            return _safe_float(re.sub(r"[^\d.\-]", "", v))
+
+        eps = _num("eps")
+        bps = _num("bps")
+        roe = round(eps / bps * 100, 2) if (eps and bps) else None
+
+        peers = [
+            {"ticker": p["itemCode"], "name": p.get("stockName", "")}
+            for p in (data.get("industryCompareInfo") or [])
+            if p.get("itemCode") and p["itemCode"] != ticker
+        ]
+
+        return {
+            "per": _num("per"),
+            "pbr": _num("pbr"),
+            "eps": eps,
+            "bps": bps,
+            "roe": roe,
+            "div_yield_pct": _num("dividendYieldRatio"),
+            "industry_code": data.get("industryCode"),
+            "peers": peers,
         }
-        for key, pat in patterns.items():
-            m = re.search(pat, text, re.DOTALL)
-            if m:
-                result[key] = _safe_float(m.group(1).replace(",", ""))
-
-        return result
     except Exception as e:
-        logger.warning("Naver ratio scrape failed for %s: %s", ticker, e)
+        logger.warning("Naver integration fetch failed for %s: %s", ticker, e)
         return {}
 
 
@@ -242,7 +249,7 @@ class KRDataSource(DataSourceBase):
 
     def get_financials(self, ticker: str) -> dict:
         basic = _naver_basic(ticker)
-        ratios = _naver_ratios(ticker)
+        integ = _naver_integration(ticker)
         income = _naver_income_summary(ticker)
 
         # pykrx로 시가총액·거래량 보완
@@ -260,6 +267,8 @@ class KRDataSource(DataSourceBase):
         # DART 재무제표 (API 키 있을 때만)
         dart = self._dart_financials(ticker)
 
+        roe_pct = integ.get("roe")
+        div_pct = integ.get("div_yield_pct")
         return {
             "ticker": ticker,
             "market": "KR",
@@ -269,16 +278,23 @@ class KRDataSource(DataSourceBase):
                 "currentPrice": basic.get("current_price"),
                 "change_pct": basic.get("change_pct"),
                 "marketCap": market_cap,
-                "per": ratios.get("per"),
-                "pbr": ratios.get("pbr"),
-                "eps": ratios.get("eps"),
-                "roe": ratios.get("roe"),
-                "dividendYield": ratios.get("div"),
+                "per": integ.get("per"),
+                "pbr": integ.get("pbr"),
+                "eps": integ.get("eps"),
+                "roe": roe_pct,
+                "dividendYield": (div_pct / 100) if div_pct is not None else None,
+                # yfinance 호환 별칭 — algo_pipeline.py의 점수 채점 함수가 이 이름들로 읽는다
+                # (예전엔 이 별칭이 없어서 국내 종목은 PER·ROE가 항상 "데이터 없음" 취급됐다)
+                "trailingPE": integ.get("per"),
+                "forwardPE": None,
+                "returnOnEquity": (roe_pct / 100) if roe_pct is not None else None,
             },
             "income_history": income.get("annual_income", {}),
             "cashflow": dart.get("cashflow", {}),
             "financials": dart.get("financials", {}),
             "balance_sheet": dart.get("balance_sheet", {}),
+            "_industry_code": integ.get("industry_code"),
+            "_industry_peers": integ.get("peers", []),
         }
 
     # ── 뉴스 ──────────────────────────────────────────────────────────────────
@@ -365,22 +381,28 @@ class KRDataSource(DataSourceBase):
     # ── 경쟁사 비교 ────────────────────────────────────────────────────────────
 
     def get_peers(self, ticker: str) -> dict:
-        sector = _TICKER_TO_SECTOR.get(ticker, "")
-        peer_tickers = [p for p in _KR_SECTOR_PEERS.get(sector, []) if p != ticker][:3]
+        """같은 업종 비교 기업 — 하드코딩 목록이 아니라 네이버 자체 업종 분류
+        (industryCompareInfo)로 그때그때 조회 → 매핑 안 된 종목이 없다."""
+        integ = _naver_integration(ticker)
+        # 5개는 받아둔다 — 3개만 쓰면 소형주 한 종목의 튄 PER 하나에 평균이
+        # 통째로 흔들릴 수 있어(중앙값으로 완화하긴 하지만 표본 자체를 늘림)
+        peer_tickers = [p["ticker"] for p in integ.get("peers", [])][:5]
+        sector = _TICKER_TO_SECTOR.get(ticker, "") or f"업종코드 {integ.get('industry_code')}"
 
         peers = []
         for pt in peer_tickers:
             basic = _naver_basic(pt)
-            ratios = _naver_ratios(pt)
-            if basic or ratios:
+            pi = _naver_integration(pt)
+            if basic or pi:
+                div_pct = pi.get("div_yield_pct")
                 peers.append({
                     "ticker": pt,
                     "name": basic.get("name", pt),
-                    "per": ratios.get("per"),
-                    "pbr": ratios.get("pbr"),
-                    "eps": ratios.get("eps"),
-                    "roe": ratios.get("roe"),
-                    "dividendYield": ratios.get("div"),
+                    "per": pi.get("per"),
+                    "pbr": pi.get("pbr"),
+                    "eps": pi.get("eps"),
+                    "roe": pi.get("roe"),
+                    "dividendYield": (div_pct / 100) if div_pct is not None else None,
                     "current_price": basic.get("current_price"),
                     "change_pct": basic.get("change_pct"),
                 })

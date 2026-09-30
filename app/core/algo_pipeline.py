@@ -361,6 +361,32 @@ def _sector_avg_pe(sector: str | None) -> float | None:
     return hit[1] if hit else None
 
 
+def _peer_sector_avg(ds, ticker: str, market: str) -> tuple[float | None, float | None]:
+    """DataSourceBase.get_peers()로 실제 동종업계 비교기업(최대 5개)의 중앙값
+    PER·ROE를 구한다 — US/KR 공통 인터페이스라 두 시장 모두 동작한다.
+
+    ETF 평균(_sector_avg_pe)보다 더 구체적인 비교(실제 경쟁사 vs 섹터 전체
+    평균)라서 이쪽을 우선 쓴다. KR은 roe가 이미 %(네이버) 단위, US는
+    yfinance의 소수(0.25=25%) 단위라 여기서 %로 통일한다. 평균이 아니라
+    중앙값을 쓰는 이유: 소형 피어 1개가 극단적 PER(예: 100배 이상)을 가지면
+    3~5개짜리 표본 평균은 그 하나에 통째로 휘둘리는데, 중앙값은 그렇지 않다.
+    """
+    try:
+        peers = ds.get_peers(ticker).get("peers", []) or []
+    except Exception as e:
+        logger.debug("peer fetch failed for %s: %s", ticker, e)
+        return None, None
+
+    pers = [p["per"] for p in peers if p.get("per") and p["per"] > 0]
+    raw_roes = [p["roe"] for p in peers if p.get("roe") is not None]
+    roes = raw_roes if market.upper() == "KR" else [r * 100 for r in raw_roes]
+
+    import statistics
+    med_pe = round(statistics.median(pers), 2) if pers else None
+    med_roe = round(statistics.median(roes), 1) if roes else None
+    return med_pe, med_roe
+
+
 def _analyst_consensus(info: dict, price: float | None) -> dict:
     """yfinance info → 월가 컨센서스 요약 (확신도 외부 검증용).
 
@@ -533,7 +559,8 @@ def _bear_signals(ta: dict, fund: dict, macro: dict, sector_pe: float | None = N
 # ── 8. 계량 검증 §4.1-4.5 ────────────────────────────────────────────────────
 
 def _quant_metrics(
-    ts: int, fs: int, ms: int, fund: dict, macro: dict, sector_pe: float | None = None,
+    ts: int, fs: int, ms: int, fund: dict, macro: dict,
+    sector_pe: float | None = None, sector_roe: float | None = None,
 ) -> dict:
     """
     §4.1 기대값, §4.2 하프켈리, §4.3 현금흐름 패턴, §4.4 CAPE, §4.5 PER/ROE.
@@ -553,14 +580,12 @@ def _quant_metrics(
     hk  = half_kelly(win_prob, exp_gain / exp_loss)
     hk  = max(0.0, min(hk, 0.25))        # 최대 25% 캡
 
-    # §4.5 밸류에이션 — 업종 평균 PER(섹터 ETF)·업종 평균 ROE(근사 테이블)와
-    # 실제로 비교한다. 둘 다 못 구하면(KR·매핑 안 되는 섹터) 생략 —
+    # §4.5 밸류에이션 — 업종 평균 PER·ROE(호출자가 peer 평균/ETF/근사 테이블
+    # 순으로 이미 계산해 넘겨줌)와 실제로 비교한다. 둘 다 못 구하면 생략 —
     # 예전처럼 종목 자신의 PER×1.1/ROE×0.9와 비교하는 항상-참인 비교는 하지 않는다.
     info = fund.get("info", {})
     pe   = info.get("trailingPE") or info.get("forwardPE")
     roe  = info.get("returnOnEquity")
-    sector = info.get("sector")
-    sector_roe = _SECTOR_AVG_ROE.get(sector or "")
     val_parts: list[str] = []
     if pe and roe and sector_pe and sector_roe:
         val_parts.append(
@@ -789,8 +814,16 @@ def analyze_stock_algo(
     macro  = raw.get("macro", {})
     df     = raw.get("price", pd.DataFrame())
 
-    # 업종 평균 PER(섹터 ETF) — 펀더멘털 점수·신호·밸류에이션 판정에서 공유
-    sector_pe = _sector_avg_pe((fund.get("info") or {}).get("sector"))
+    # 업종 평균 PER·ROE — 펀더멘털 점수·신호·밸류에이션 판정에서 공유.
+    # 1순위: 실제 동종업계 비교기업 평균(get_peers, US/KR 공통) — 더 구체적.
+    # 2순위: 섹터 ETF의 trailingPE(US만, 매핑 안 되는 업종 대비 안전망).
+    # ROE는 피어 데이터가 없으면 장기 근사 테이블로 대체(US만 — 참고용).
+    _info_sector = (fund.get("info") or {}).get("sector")
+    sector_pe, sector_roe = _peer_sector_avg(ds, ticker, market)
+    if sector_pe is None:
+        sector_pe = _sector_avg_pe(_info_sector)
+    if sector_roe is None:
+        sector_roe = _SECTOR_AVG_ROE.get(_info_sector or "")
 
     # Layer 1 — 4개 분야 점수
     ta               = _technical_indicators(df)
@@ -825,7 +858,7 @@ def analyze_stock_algo(
             bears = bears + [label]
 
     # Layer 3 — 계량 검증 (§4)
-    quant = _quant_metrics(ts, fs, ms, fund, macro, sector_pe=sector_pe)
+    quant = _quant_metrics(ts, fs, ms, fund, macro, sector_pe=sector_pe, sector_roe=sector_roe)
 
     # Layer 3b — 확신도 (커버리지 · 신호 일치 · 우위 · 경계선 · 뉴스 · 외부검증)
     _info = fund.get("info", {}) or {}

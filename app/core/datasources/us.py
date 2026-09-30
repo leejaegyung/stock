@@ -191,7 +191,7 @@ class USDataSource(DataSourceBase):
         t = yf.Ticker(ticker)
         info = t.info or {}
         sector = info.get("sector", "")
-        peer_tickers = [p for p in _SECTOR_PEERS.get(sector, []) if p != ticker][:3]
+        peer_tickers = [p for p in _SECTOR_PEERS.get(sector, []) if p != ticker][:5]
 
         peers = []
         for pt in peer_tickers:
