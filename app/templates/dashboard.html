@@ -95,7 +95,7 @@ main{grid-column:2;overflow-y:auto;padding:20px 24px 32px;background:var(--bg);d
 /* ══ 공통 컴포넌트 ══ */
 .box{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 3px var(--shadow)}
 .box-head{display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);gap:8px}
-.box-title{font-size:15px;font-weight:700;color:var(--ink);letter-spacing:-.02em;flex:1}
+.box-title{font-size:15px;font-weight:700;color:var(--ink);letter-spacing:-.02em;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .box-sub{font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 .box-body{padding:10px 12px}
 .box-body-flush{padding:0}
@@ -813,9 +813,16 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
     <div class="fin-col">
 
       <div class="box">
-        <div class="box-head"><span class="box-title">빠른 입력</span><span class="box-sub">고정 항목 클릭 → 오늘 날짜로 즉시 등록</span></div>
+        <div class="box-head">
+          <span class="box-title">가계부</span>
+          <button class="btn btn-link" onclick="toggleTxForm()" id="tx-form-toggle">+ 추가</button>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:6px 12px;border-bottom:1px solid var(--line)">
+          <select id="payday-select" onchange="changePaydaySetting()" title="월급날을 기준으로 한 달을 계산합니다" style="height:22px;font-size:10px;border-radius:6px;border:1px solid var(--line-2);background:var(--input);color:var(--sub);padding:0 4px"></select>
+          <div class="month-nav"><button onclick="shiftMonth(-1)">‹</button><span class="month-label" id="month-label"></span><button onclick="shiftMonth(1)">›</button></div>
+        </div>
         <div class="quick-chips" id="fixed-chips-wrap" style="display:none"><div id="fixed-chips" style="display:flex;flex-wrap:wrap;gap:5px"></div></div>
-        <div class="box-body" style="display:flex;flex-direction:column;gap:8px">
+        <div id="tx-form" style="display:none;padding:10px 12px;border-bottom:1px solid var(--line);flex-direction:column;gap:8px">
           <div class="form-grid">
             <div class="fg" style="max-width:150px;min-width:120px">
               <label>유형</label>
@@ -827,7 +834,6 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
             </div>
             <div class="fg" style="max-width:130px;min-width:110px" id="tx-date-wrap"><label>날짜</label><input type="date" id="tx-date"></div>
             <div class="fg" style="max-width:100px;min-width:80px;display:none" id="tx-fixed-day-wrap"><label>매월 일자</label><input type="number" id="tx-fixed-day" min="1" max="28" value="25" style="text-align:center"></div>
-            <div class="fg" style="max-width:130px;min-width:100px"><label>카테고리</label><select id="tx-category"></select></div>
           </div>
           <div id="fixed-subrow" style="display:none;padding:5px 0 0;border-top:1px solid var(--line)">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -839,12 +845,17 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
               <span style="font-size:10.5px;color:var(--mute)">→ 매월 <b id="fixed-day-preview">25</b>일 자동 등록</span>
             </div>
           </div>
+          <div class="fg">
+            <label>카테고리</label>
+            <div class="pills" id="tx-category-chips"></div>
+          </div>
           <div class="form-grid">
             <div class="fg"><label>금액 (원)</label><input type="text" id="tx-amount" inputmode="numeric" placeholder="예: 1,500,000" oninput="fmtInput(this)"></div>
             <div class="fg" style="flex:2"><label>메모</label><input type="text" id="tx-memo" placeholder="선택 입력"></div>
             <button class="btn btn-primary" id="btn-tx-add" onclick="addTransaction()">추가</button>
           </div>
         </div>
+        <div id="tx-list" class="box-body-flush"><div class="empty"><div class="empty-icon">—</div>거래 내역이 없습니다.</div></div>
       </div>
 
       <div class="box">
@@ -857,15 +868,6 @@ html.modal-lock,html.modal-lock body{overflow:hidden}
         <div id="portfolio-body" class="box-body-flush">
           <div class="empty"><div class="empty-icon">—</div>관심종목에서 보유 수량을 입력하세요.</div>
         </div>
-      </div>
-
-      <div class="box">
-        <div class="box-head">
-          <span class="box-title">가계부</span>
-          <select id="payday-select" onchange="changePaydaySetting()" title="월급날을 기준으로 한 달을 계산합니다" style="height:24px;font-size:10.5px;border-radius:7px;border:1px solid var(--line-2);background:var(--input);color:var(--sub);padding:0 4px;margin-right:6px"></select>
-          <div class="month-nav"><button onclick="shiftMonth(-1)">‹</button><span class="month-label" id="month-label"></span><button onclick="shiftMonth(1)">›</button></div>
-        </div>
-        <div id="tx-list" class="box-body-flush"><div class="empty"><div class="empty-icon">—</div>거래 내역이 없습니다.</div></div>
       </div>
     </div>
 
@@ -2585,6 +2587,18 @@ function periodLabelJS(payday, year, month){
   return `${start.getMonth() + 1}.${start.getDate()} ~ ${end.getMonth() + 1}.${end.getDate()}`;
 }
 
+let _txCategory = '';
+function renderTxCategoryChips(cats){
+  _txCategory = cats[0] || '';
+  document.getElementById('tx-category-chips').innerHTML = cats.map((c, i) =>
+    `<button type="button" class="pill${i === 0 ? ' on' : ''}" onclick="selectTxCategory('${c}', this)">${c}</button>`
+  ).join('');
+}
+function selectTxCategory(c, el){
+  _txCategory = c;
+  el.parentElement.querySelectorAll('.pill').forEach(b => b.classList.remove('on'));
+  el.classList.add('on');
+}
 function setTxType(type){
   _txType = type;
   const isFixed = type === '고정';
@@ -2596,13 +2610,20 @@ function setTxType(type){
   document.getElementById('fixed-subrow').style.display = isFixed ? '' : 'none';
   document.getElementById('btn-tx-add').textContent = isFixed ? '고정 등록' : '추가';
   const cats = type === '지출' ? EXPENSE_CATS : isFixed ? (_fixedSubType === '수입' ? INCOME_CATS : EXPENSE_CATS) : INCOME_CATS;
-  document.getElementById('tx-category').innerHTML = cats.map(c => `<option>${c}</option>`).join('');
+  renderTxCategoryChips(cats);
 }
 function setFixedSubType(subType){
   _fixedSubType = subType;
   document.getElementById('fixed-sub-income').className = subType === '수입' ? 't-income' : '';
   document.getElementById('fixed-sub-expense').className = subType === '지출' ? 't-expense' : '';
-  document.getElementById('tx-category').innerHTML = (subType === '수입' ? INCOME_CATS : EXPENSE_CATS).map(c => `<option>${c}</option>`).join('');
+  renderTxCategoryChips(subType === '수입' ? INCOME_CATS : EXPENSE_CATS);
+}
+function toggleTxForm(){
+  const f = document.getElementById('tx-form');
+  const open = f.style.display === 'flex';
+  f.style.display = open ? 'none' : 'flex';
+  document.getElementById('tx-form-toggle').textContent = open ? '+ 추가' : '닫기';
+  if (!open) setTimeout(() => { const a = document.getElementById('tx-amount'); if (a) a.focus(); }, 30);
 }
 document.addEventListener('DOMContentLoaded', () => {
   const dayEl = document.getElementById('tx-fixed-day'), preview = document.getElementById('fixed-day-preview');
@@ -3381,7 +3402,7 @@ async function loadTxList(){
   } catch(e){ el.innerHTML = `<div class="empty" style="color:var(--up)">오류: ${esc(e.message)}</div>`; }
 }
 async function addTransaction(){
-  const category = document.getElementById('tx-category').value;
+  const category = _txCategory;
   const amount = parseWon(document.getElementById('tx-amount').value);
   const memo = document.getElementById('tx-memo').value.trim();
   if (_txType === '고정'){
@@ -4520,6 +4541,7 @@ function mbOpenAddTxSheet(){
   const cats = MB.txType === '지출' ? EXPENSE_CATS
     : isFixed ? (MB.fixedSub === '수입' ? INCOME_CATS : EXPENSE_CATS)
     : INCOME_CATS;
+  if (!cats.includes(MB._txCategory)) MB._txCategory = cats[0];
   mbOpenSheet(`
     <div style="font-size:18px;font-weight:700;letter-spacing:-.025em;margin-bottom:14px">가계부 추가</div>
     <div class="m-seg" style="margin-bottom:10px">
@@ -4533,12 +4555,19 @@ function mbOpenAddTxSheet(){
     </div>
     <input type="number" class="m-inp" id="m-tx-day" placeholder="매월 며칠 (1~28)" value="${MB._txDay || 1}" min="1" max="28" style="margin-bottom:8px">`
       : `<input type="date" class="m-inp" id="m-tx-date" value="${MB._txDate}" style="margin-bottom:8px">`}
-    <select class="m-inp" id="m-tx-category" style="margin-bottom:8px">${cats.map(c => `<option>${c}</option>`).join('')}</select>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+      ${cats.map(c => `<button type="button" class="m-filter${c === MB._txCategory ? ' on' : ''}" onclick="mbSelectTxCategory('${esc(c)}', this)">${esc(c)}</button>`).join('')}
+    </div>
     <input class="m-inp" id="m-tx-amount" inputmode="numeric" placeholder="금액 (원)" value="${MB._txAmount || ''}" oninput="fmtInput(this)" style="margin-bottom:8px">
     <input class="m-inp" id="m-tx-memo" placeholder="메모 (선택)" value="${esc(MB._txMemo || '')}" style="margin-bottom:14px">
     <button class="m-btn-primary" id="m-tx-submit" onclick="mbSubmitTx()">${isFixed ? '고정 등록' : '추가'}</button>
   `);
   setTimeout(() => { const i = document.getElementById('m-tx-amount'); if (i && !isFixed) i.focus(); }, 60);
+}
+function mbSelectTxCategory(c, el){
+  MB._txCategory = c;
+  el.parentElement.querySelectorAll('.m-filter').forEach(b => b.classList.remove('on'));
+  el.classList.add('on');
 }
 function mbSnapshotTxForm(){
   const a = document.getElementById('m-tx-amount'), m = document.getElementById('m-tx-memo'), d = document.getElementById('m-tx-date');
@@ -4549,7 +4578,7 @@ function mbSnapshotTxForm(){
 function mbSetTxType(type){ mbSnapshotTxForm(); MB.txType = type; mbOpenAddTxSheet(); }
 function mbSetFixedSub(sub){ mbSnapshotTxForm(); MB.fixedSub = sub; mbOpenAddTxSheet(); }
 async function mbSubmitTx(){
-  const category = document.getElementById('m-tx-category').value;
+  const category = MB._txCategory;
   const amount = parseWon(document.getElementById('m-tx-amount').value);
   const memo = document.getElementById('m-tx-memo').value.trim();
   const btn = document.getElementById('m-tx-submit');
