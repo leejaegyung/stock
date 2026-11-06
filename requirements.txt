@@ -1,5 +1,5 @@
 anthropic>=0.30.0
-yfinance>=0.2.40
+yfinance>=1.8.0
 pykrx>=1.0.45
 sqlalchemy>=2.0.0
 fastapi>=0.111.0
