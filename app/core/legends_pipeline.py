@@ -2,18 +2,16 @@
 Layer 5 — 월가 거장 5인(버핏·멍거·그레이엄·린치·드러켄밀러) 분석 오케스트레이터.
 
 algo_pipeline.py(LLM-free 메인 분석 경로)가 이미 쓰는 것과 같은 재무·기술·거시
-데이터 수집 함수를 그대로 재사용해 중복 호출을 피하고, 5명의 LLM 에이전트
-(app.core.agents.legends.LegendAnalyst)에게 동시에 판단을 묻는다. 판단을 숫자로
-합치는 계산은 app.core.legends_blend 가 담당한다 (Sacred Rule: LLM은 해석,
-코드는 계산). DB 저장은 하지 않는다 — 호출자(entrypoints)가 결과를 받아 저장한다.
+데이터 수집 함수를 그대로 재사용해 중복 호출을 피하고, 5명의 규칙 기반 분석기
+(app.core.agents.legends.LegendAnalyst — LLM 호출 없음, 비용 0)에게 판단을
+묻는다. 판단을 숫자로 합치는 계산은 app.core.legends_blend 가 담당한다
+(Sacred Rule: 해석은 분리된 규칙, 집계는 코드). DB 저장은 하지 않는다 —
+호출자(entrypoints)가 결과를 받아 저장한다.
 """
 
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-from anthropic import Anthropic
 
 from app.core.agents.legends import LEGEND_PERSONAS, LegendAnalyst
 from app.core.algo_pipeline import _fetch_price_df, _technical_indicators
@@ -77,37 +75,26 @@ def _build_legend_data(ticker: str, market: str, held: bool, avg_price: float | 
 def analyze_legends(
     ticker: str,
     market: str,
-    client: Anthropic,
     strategy: str = DEFAULT_STRATEGY,
     held: bool = False,
     avg_price: float | None = None,
 ) -> dict:
-    """5명의 거장 에이전트를 병렬로 돌리고 합친다.
+    """5명의 거장 분석기를 돌리고 합친다. 규칙 기반이라 즉시(동기) 끝나고 비용이 없다.
 
     :returns: {"ticker","market","strategy","data","votes":[...5개...],"blend":{...}}
     """
     data = _build_legend_data(ticker, market, held, avg_price)
 
     votes: list[dict] = []
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {
-            pool.submit(LegendAnalyst(client, persona).run, ticker, data): persona
-            for persona in LEGEND_PERSONAS
-        }
-        for fut in as_completed(futures):
-            persona = futures[fut]
-            try:
-                votes.append(fut.result())
-            except Exception as e:
-                logger.warning("legends: %s agent failed for %s: %s", persona, ticker, e)
-                votes.append({
-                    "name": persona, "title": LEGEND_PERSONAS[persona]["title"],
-                    "verdict": "중립", "confidence": 0, "reasons": ["분석 실패"], "key_risk": "",
-                })
-
-    # 표시 순서를 고정(병렬 실행이라 완료 순서가 들쭉날쭉하므로)
-    order = {name: i for i, name in enumerate(LEGEND_PERSONAS)}
-    votes.sort(key=lambda v: order.get(v.get("name", ""), 99))
+    for persona in LEGEND_PERSONAS:
+        try:
+            votes.append(LegendAnalyst(persona).run(ticker, data))
+        except Exception as e:
+            logger.warning("legends: %s agent failed for %s: %s", persona, ticker, e)
+            votes.append({
+                "name": persona, "title": LEGEND_PERSONAS[persona]["title"],
+                "verdict": "중립", "confidence": 0, "reasons": ["분석 실패"], "key_risk": "",
+            })
 
     blend = blend_votes(votes, strategy)
     return {"ticker": ticker, "market": market, "strategy": blend["strategy"], "data": data, "votes": votes, "blend": blend}

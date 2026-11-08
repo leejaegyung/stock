@@ -114,18 +114,20 @@ app/core/agents/bear.py          — BearResearcher (sonnet)
 app/core/agents/research_manager.py — ResearchManager (sonnet)
 app/core/agents/quant_risk.py    — QuantRisk (sonnet, formulas.py 호출)
 app/core/agents/chief_advisor.py — ChiefAdvisor (opus)
-app/core/agents/legends.py       — LegendAnalyst (sonnet) — 월가 거장 5인(버핏·멍거·그레이엄·
-                                   린치·드러켄밀러) 페르소나. 실존 인물이 아니라 공개된 투자 철학
-                                   기반 AI (virattt/ai-hedge-fund 오픈소스 구조에서 착안, 프롬프트는
-                                   직접 작성). 같은 재무·기술·거시 데이터를 보고 각자 매수/중립/매도 +
-                                   확신도 + 근거를 낸다
+app/core/agents/legends.py       — LegendAnalyst (규칙 기반, LLM 호출 없음 → 비용 0) — 월가 거장
+                                   5인(버핏·멍거·그레이엄·린치·드러켄밀러) 페르소나. 실존 인물이 아니라
+                                   공개된 투자 철학을 조건문으로 옮긴 점수표 (virattt/ai-hedge-fund
+                                   오픈소스의 "여러 관점으로 같은 데이터를 본다" 구조에서 착안). 같은
+                                   재무·기술·거시 데이터를 보고 각자 매수/중립/매도 + 확신도 + 근거를 낸다.
+                                   원래 Sonnet→Haiku LLM 호출이었으나 "시스템 기조=비용 0" 원칙에 따라
+                                   완전히 규칙 기반으로 교체
 app/core/legends_blend.py        — 5인 표를 전략별 가중치로 합치는 순수 함수 (Layer 1): 딥 밸류(그레이엄
                                    가중)·펀더멘털 롱숏(버핏·멍거 가중)·인플렉션(린치·드러켄밀러 가중).
                                    목표 비중 상한 25%, 의견이 갈리면(dispersion) 현금 비중 확대
 app/core/legends_pipeline.py     — 5인 분석 오케스트레이터 (Layer 5): algo_pipeline.py와 같은 데이터
-                                   소스 재사용 → LegendAnalyst 5개 병렬 호출 → legends_blend로 합산.
-                                   DB 저장 없음(호출자 책임). /api/legends/{ticker} GET·POST, 자동
-                                   스케줄 없음 — 비용 있는 LLM 호출(Sonnet×5)이라 사용자가 직접 트리거
+                                   소스 재사용 → LegendAnalyst 5개 순차 호출(규칙 기반이라 즉시 끝남) →
+                                   legends_blend로 합산. DB 저장 없음(호출자 책임). /api/legends/{ticker}
+                                   GET·POST, 자동 스케줄 없음 — 사용자가 직접 트리거 (비용은 없지만 수동 실행 유지)
 app/core/pipeline.py             — analyze_stock() + morning_brief()
 app/entrypoints/cli.py           — Typer CLI
 app/entrypoints/web.py           — FastAPI + 브리핑 HTML

@@ -2801,16 +2801,15 @@ async def paper_reset(initial_cash_krw: float = 10_000_000.0) -> dict:
 # 보고 각자 판단 → 전략별 가중치로 합쳐 목표 비중 계산" 구조에서 착안했다.
 # 기존 종목(보유 중 — 팔지 말지)이든 신규 종목(미보유 — 살지 말지)이든 같은
 # 엔드포인트를 쓴다 — held 여부는 관심목록에서 자동으로 읽어 판단에만 참고시키고
-# 매수/중립/매도 자체의 의미는 바꾸지 않는다. 비용이 드는 LLM 호출(Sonnet×5)이라
-# 자동 스케줄 없이 사용자가 직접 눌렀을 때만 실행된다.
+# 매수/중립/매도 자체의 의미는 바꾸지 않는다. 규칙 기반(LLM 호출 없음)이라
+# 비용이 전혀 없고 즉시 끝난다 — 우리 시스템 기조(비용이 안 드는 것)에 맞춰
+# 애초에 LLM(Sonnet → Haiku)으로 짰던 걸 전부 코드 규칙으로 바꿨다.
 
 _LEGEND_STRATEGIES = ("딥 밸류", "펀더멘털 롱숏", "인플렉션")
 
 
 def _bg_legends(ticker: str, market: str, strategy: str) -> None:
     from datetime import datetime, timezone
-
-    from anthropic import Anthropic
 
     from app.core.legends_pipeline import analyze_legends
 
@@ -2820,9 +2819,8 @@ def _bg_legends(ticker: str, market: str, strategy: str) -> None:
         avg_price = float(wl.avg_price) if (wl and wl.avg_price) else None
 
     try:
-        client = Anthropic(api_key=_get_api_key("anthropic"))
         result = analyze_legends(
-            ticker, market, client, strategy=strategy, held=held, avg_price=avg_price,
+            ticker, market, strategy=strategy, held=held, avg_price=avg_price,
         )
     except Exception as e:
         logger.error("legends analysis failed for %s/%s: %s", ticker, market, e)
@@ -2848,7 +2846,7 @@ async def trigger_legends(
     ticker: str, background_tasks: BackgroundTasks,
     market: str = "US", strategy: str = "펀더멘털 롱숏",
 ) -> dict:
-    """5인 분석 실행 (백그라운드) — Sonnet 5회 호출, 완료까지 보통 10~30초."""
+    """5인 분석 실행 (백그라운드) — 규칙 기반, 비용 없음, 보통 1~2초 내 완료."""
     if strategy not in _LEGEND_STRATEGIES:
         strategy = "펀더멘털 롱숏"
     background_tasks.add_task(_bg_legends, ticker.upper(), market.upper(), strategy)
