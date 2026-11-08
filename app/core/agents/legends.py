@@ -179,22 +179,22 @@ def _munger(data: dict) -> dict:
         if roe >= 20:
             s.add(2, f"ROE {roe}%는 훌륭한 사업의 증거")
         elif roe >= 12:
-            s.add(1)
+            s.add(1, f"ROE {roe}%는 양호한 수준")
         else:
             s.add(-1, f"ROE {roe}%로 사업의 질이 눈에 띄지 않음")
     if margin is not None and margin >= 25:
         s.add(2, f"순이익률 {margin}%로 가격결정력이 뚜렷함")
     elif margin is not None and margin >= 15:
-        s.add(1)
+        s.add(1, f"순이익률 {margin}%는 양호한 수준")
     if opm is not None and opm >= 25:
         s.add(1, f"영업이익률 {opm}%로 사업의 질이 우수")
     if dte is not None:
         if dte > 150:
             s.add(-2, f"부채비율 {dte}% — '바보짓을 피하라' 원칙에서 경계 대상")
         elif dte > 100:
-            s.add(-1)
+            s.add(-1, f"부채비율 {dte}%로 다소 높은 편")
         elif dte < 50:
-            s.add(1)
+            s.add(1, f"부채비율 {dte}%로 보수적인 재무구조")
     if peg is not None:
         if peg < 1.5:
             s.add(1, f"PEG {peg}로 성장 대비 가격이 합리적")
@@ -222,7 +222,7 @@ def _graham(data: dict) -> dict:
         if per < 15:
             s.add(2, f"PER {per}배는 전통적 가치투자 기준에 부합")
         elif per < 20:
-            s.add(1)
+            s.add(1, f"PER {per}배는 비교적 합리적인 수준")
         elif per >= 30:
             s.add(-2, f"PER {per}배는 안전마진 관점에서 너무 비쌈")
     if pbr is not None:
@@ -325,9 +325,9 @@ def _druckenmiller(data: dict) -> dict:
         elif price < sma20 < sma50 < sma200:
             s.add(-2, "이동평균 역배열로 뚜렷한 하락 추세")
         elif price > sma200:
-            s.add(1)
+            s.add(1, f"이동평균이 뒤섞여 있지만(정배열·역배열 아님) 장기선({sma200}) 위라 추세는 아직 살아있음")
         else:
-            s.add(-1)
+            s.add(-1, f"이동평균이 뒤섞여 있고 장기선({sma200}) 아래라 추세가 꺾인 쪽에 가까움")
     if macd is not None:
         if macd > 0:
             s.add(1, f"MACD 히스토그램 양수({macd})로 모멘텀 우호적")
@@ -347,7 +347,7 @@ def _druckenmiller(data: dict) -> dict:
         if vix > 25:
             s.add(-1, f"VIX {vix}로 시장 변동성 확대 — 리스크 축소 선호")
         elif vix < 15:
-            s.add(1)
+            s.add(1, f"VIX {vix}로 시장이 안정적 — 위험자산에 우호적")
     if cape is not None:
         if cape >= 32:
             s.add(-1, f"CAPE {cape}로 시장 전반이 과열 — 거시 역풍")
