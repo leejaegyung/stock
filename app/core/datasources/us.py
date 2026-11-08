@@ -60,9 +60,15 @@ def _fred_macro(api_key: str) -> dict:
 _SECTOR_PEERS: dict[str, list[str]] = {
     "Technology": ["AAPL", "MSFT", "GOOGL", "META", "NVDA"],
     "Consumer Cyclical": ["AMZN", "TSLA", "HD", "MCD"],
+    "Consumer Defensive": ["PG", "KO", "PEP", "WMT", "COST"],
     "Financial Services": ["JPM", "BAC", "WFC", "GS"],
     "Healthcare": ["JNJ", "PFE", "UNH", "ABBV"],
     "Energy": ["XOM", "CVX", "COP", "SLB"],
+    "Industrials": ["HON", "UPS", "CAT", "GE", "BA"],
+    "Utilities": ["NEE", "DUK", "SO", "D", "AEP"],
+    "Communication Services": ["GOOGL", "META", "DIS", "VZ", "T"],
+    "Basic Materials": ["LIN", "SHW", "FCX", "NEM", "DD"],
+    "Real Estate": ["PLD", "AMT", "EQIX", "O", "SPG"],
 }
 
 
@@ -112,7 +118,7 @@ class USDataSource(DataSourceBase):
             k: info.get(k)
             for k in [
                 "shortName", "sector", "industry",
-                "trailingPE", "forwardPE", "returnOnEquity",
+                "trailingPE", "forwardPE", "returnOnEquity", "priceToBook",
                 "debtToEquity", "dividendYield", "earningsGrowth",
                 "revenueGrowth", "profitMargins", "operatingMargins",
                 "marketCap", "currentPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
