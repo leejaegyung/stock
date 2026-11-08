@@ -1956,6 +1956,7 @@ function renderReportsCards(){
       <div class="rcard-foot">
         <span class="date">${esc(r.date)}${dur}</span>
         <button class="btn btn-xs btn-flat" onclick="showReport(${r.id})">전문 보기</button>
+        <button class="btn btn-xs btn-flat" onclick="showLegends('${esc(r.ticker)}','${r.market}')">🏛 거장 5인</button>
         ${isDisc
           ? `<button class="btn btn-xs btn-primary" onclick="scanAdd('${esc(r.ticker)}','${r.market}',this)">＋ 관심종목</button>`
           : `<button class="btn btn-xs btn-flat" onclick="analyze('${esc(r.ticker)}','${r.market}')">재분석</button>`}
@@ -2517,6 +2518,97 @@ async function loadReportHistory(ticker, market){
         </div>
       </details>`;
   } catch { el.innerHTML = ''; }
+}
+/* ══ 월가 거장 5인 분석 ══════════════════════════════════════════════════ */
+const LEGEND_STRATEGIES = ['펀더멘털 롱숏', '딥 밸류', '인플렉션'];
+const LEGEND_VERDICT_COLOR = { '매수': 'var(--up)', '매도': 'var(--accent-strong)', '중립': 'var(--mute)' };
+let _legendTicker = '', _legendMarket = '';
+
+async function showLegends(ticker, market){
+  _legendTicker = ticker; _legendMarket = market;
+  document.getElementById('modal-hd-info').innerHTML = `
+    <div style="font-weight:700;font-size:15px">🏛 월가 거장 5인 — ${esc(ticker)} ${mktChip(market)}</div>
+    <div style="font-size:10.5px;color:var(--mute);margin-top:2px">버핏·멍거·그레이엄·린치·드러켄밀러 (실존 인물이 아닌, 공개된 투자 철학 기반 AI 페르소나) · 실제 자금·투자 권유와 무관</div>`;
+  document.getElementById('modal-body').innerHTML = `<div style="padding:12px 0"><span class="spin"></span> 불러오는 중…</div>`;
+  openModal();
+  try {
+    const d = await api(`/api/legends/${encodeURIComponent(ticker)}?market=${market}`);
+    renderLegendsResult(d.found ? d : null);
+  } catch(e){
+    document.getElementById('modal-body').innerHTML = `<p style="color:var(--up)">${esc(e.message)}</p>`;
+  }
+}
+function renderLegendsResult(d){
+  const strategySel = `<select id="legend-strategy" style="height:30px;font-size:12px;border-radius:8px;border:1px solid var(--line-2);background:var(--input);color:var(--ink);padding:0 8px">
+    ${LEGEND_STRATEGIES.map(s => `<option ${d && d.strategy === s ? 'selected' : ''}>${s}</option>`).join('')}
+  </select>`;
+  const runBtn = `<button class="btn btn-primary btn-sm" id="legend-run-btn" onclick="runLegends()">${d ? '다시 묻기' : '5인에게 물어보기'}</button>`;
+  const head = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">${strategySel}${runBtn}
+    ${d ? `<span style="font-size:11px;color:var(--mute);margin-left:auto">${esc(new Date(d.created_at).toLocaleString('ko-KR'))} 분석</span>` : ''}</div>`;
+
+  if (!d){
+    document.getElementById('modal-body').innerHTML = head +
+      `<div class="empty"><div class="empty-icon">🏛</div>아직 분석한 적 없는 종목입니다. 전략을 고르고 "5인에게 물어보기"를 눌러보세요.<br>
+      <span style="font-size:11px;color:var(--mute)">Sonnet 5회 호출 — 완료까지 보통 10~30초, 비용이 발생합니다.</span></div>`;
+    return;
+  }
+
+  const b = d.blend;
+  const consCol = LEGEND_VERDICT_COLOR[b.consensus] || 'var(--mute)';
+  const rows = d.votes.map(v => {
+    const col = LEGEND_VERDICT_COLOR[v.verdict] || 'var(--mute)';
+    return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <span style="font-weight:700;font-size:13px">${esc(v.name)}</span>
+        <span style="font-size:11px;color:var(--mute)">${esc((v.title || '').replace(v.name + ' — ', ''))}</span>
+        <span style="flex:1"></span>
+        <span style="font-weight:700;font-size:12px;color:${col}">${esc(v.verdict)}</span>
+        <span style="font-size:11px;color:var(--mute)">확신도 ${v.confidence}</span>
+      </div>
+      ${(v.reasons || []).map(r => `<div class="reason"><span class="b">•</span><span>${esc(r)}</span></div>`).join('')}
+      ${v.key_risk ? `<div style="font-size:11px;color:var(--warn);margin-top:3px">⚠ ${esc(v.key_risk)}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  document.getElementById('modal-body').innerHTML = head + `
+    <div class="box" style="margin-bottom:14px">
+      <div style="padding:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+        <div><div style="font-size:10.5px;color:var(--mute)">종합 의견</div><div style="font-weight:700;font-size:16px;color:${consCol}">${esc(b.consensus)}</div></div>
+        <div><div style="font-size:10.5px;color:var(--mute)">목표 비중</div><div style="font-weight:700;font-size:16px">${b.target_weight_pct}%</div></div>
+        <div><div style="font-size:10.5px;color:var(--mute)">현금 비중</div><div style="font-weight:700;font-size:16px;color:var(--mute)">${b.cash_pct}%</div></div>
+        <div><div style="font-size:10.5px;color:var(--mute)">의견 대립도</div><div style="font-weight:700;font-size:16px">${Math.round(b.dispersion * 100)}%</div></div>
+      </div>
+      ${(b.notes && b.notes.length) ? `<div style="padding:0 12px 12px;font-size:11px;color:var(--sub)">${b.notes.map(esc).join('<br>')}</div>` : ''}
+    </div>
+    ${rows}
+    <div style="font-size:10.5px;color:var(--mute);margin-top:10px">실제 자금·실제 계좌와 무관한 참고용 분석입니다. 투자 권유가 아닙니다.</div>`;
+}
+async function runLegends(){
+  const sel = document.getElementById('legend-strategy');
+  const strategy = sel ? sel.value : '펀더멘털 롱숏';
+  const btn = document.getElementById('legend-run-btn');
+  const before = (await api(`/api/legends/${encodeURIComponent(_legendTicker)}?market=${_legendMarket}`).catch(() => null));
+  const beforeAt = before && before.found ? before.created_at : null;
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    await api(`/api/legends/${encodeURIComponent(_legendTicker)}?market=${_legendMarket}&strategy=${encodeURIComponent(strategy)}`, { method: 'POST' });
+    let tries = 0;
+    const poll = setInterval(async () => {
+      tries++;
+      const d = await api(`/api/legends/${encodeURIComponent(_legendTicker)}?market=${_legendMarket}`).catch(() => null);
+      if (d && d.found && d.created_at !== beforeAt){
+        clearInterval(poll);
+        renderLegendsResult(d);
+        notifyDone(`🏛 ${_legendTicker} 거장 5인 분석 완료`, () => showLegends(_legendTicker, _legendMarket));
+      } else if (tries >= 20){
+        clearInterval(poll);
+        if (btn){ btn.disabled = false; btn.textContent = '다시 묻기'; }
+      }
+    }, 3000);
+  } catch(e){
+    if (btn){ btn.disabled = false; btn.textContent = '5인에게 물어보기'; }
+    toast(e.message, 'err');
+  }
 }
 function modalBgClick(e){ if (e.target === document.getElementById('modal-bg')) closeModal(); }
 let _modalOpen = false, _navSuppress = false, _mbSheetOpen = false;
@@ -4163,6 +4255,9 @@ async function mbStock(){
         </div>
         ${rep ? mbReportBody(M, rep, s.market)
           : `<div style="padding:22px 16px;text-align:center;color:var(--mute);font-size:13px">${busy ? '분석 진행 중… (3~5분)' : '아직 분석 리포트가 없습니다'}<br><button class="m-filter" style="margin-top:10px;background:var(--accent);color:#fff" ${busy ? 'disabled' : 'onclick="mbAnalyze()"'}>${busy ? '분석 중…' : '지금 분석'}</button></div>`}
+        ${rep ? `<div style="padding:10px 16px;border-top:1px solid var(--line)">
+          <button class="m-filter" style="width:100%;height:36px;background:var(--chip);color:var(--sub)" onclick="showLegends('${esc(s.ticker)}','${s.market}')">🏛 월가 거장 5인에게 물어보기</button>
+        </div>` : ''}
       </div>
     </div>
     <div class="m-sec"><b>관련 뉴스</b></div>

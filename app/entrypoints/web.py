@@ -25,6 +25,7 @@ from app.db.models import (
     AppSetting,
     AssetItem,
     LedgerTransaction,
+    LegendAnalysis,
     NetWorthSnapshot,
     NewsItem,
     PaperAccount,
@@ -2792,6 +2793,85 @@ async def paper_reset(initial_cash_krw: float = 10_000_000.0) -> dict:
             session.add(PaperAccount(cash_krw=initial_cash_krw, initial_cash_krw=initial_cash_krw))
         session.commit()
     return {"status": "reset", "initial_cash_krw": initial_cash_krw}
+
+
+# ── 월가 거장 5인 분석 (버핏·멍거·그레이엄·린치·드러켄밀러) ──────────────────────
+#
+# virattt/ai-hedge-fund(오픈소스) 저장소의 "여러 투자자 페르소나가 같은 데이터를
+# 보고 각자 판단 → 전략별 가중치로 합쳐 목표 비중 계산" 구조에서 착안했다.
+# 기존 종목(보유 중 — 팔지 말지)이든 신규 종목(미보유 — 살지 말지)이든 같은
+# 엔드포인트를 쓴다 — held 여부는 관심목록에서 자동으로 읽어 판단에만 참고시키고
+# 매수/중립/매도 자체의 의미는 바꾸지 않는다. 비용이 드는 LLM 호출(Sonnet×5)이라
+# 자동 스케줄 없이 사용자가 직접 눌렀을 때만 실행된다.
+
+_LEGEND_STRATEGIES = ("딥 밸류", "펀더멘털 롱숏", "인플렉션")
+
+
+def _bg_legends(ticker: str, market: str, strategy: str) -> None:
+    from datetime import datetime, timezone
+
+    from anthropic import Anthropic
+
+    from app.core.legends_pipeline import analyze_legends
+
+    with _session() as session:
+        wl = session.query(Watchlist).filter_by(ticker=ticker, market=market).first()
+        held = bool(wl and (wl.quantity or 0) > 0)
+        avg_price = float(wl.avg_price) if (wl and wl.avg_price) else None
+
+    try:
+        client = Anthropic(api_key=_get_api_key("anthropic"))
+        result = analyze_legends(
+            ticker, market, client, strategy=strategy, held=held, avg_price=avg_price,
+        )
+    except Exception as e:
+        logger.error("legends analysis failed for %s/%s: %s", ticker, market, e)
+        return
+
+    with _session() as session:
+        row = session.query(LegendAnalysis).filter_by(ticker=ticker, market=market).first()
+        if row is None:
+            row = LegendAnalysis(ticker=ticker, market=market)
+            session.add(row)
+        row.strategy = result["strategy"]
+        row.votes_json = json.dumps(result["votes"], ensure_ascii=False)
+        row.blend_json = json.dumps(result["blend"], ensure_ascii=False)
+        row.data_json = json.dumps(result["data"], ensure_ascii=False, default=str)
+        row.held = 1 if held else 0
+        row.created_at = datetime.now(timezone.utc)
+        session.commit()
+    logger.info("legends analysis saved: %s/%s (%s)", ticker, market, strategy)
+
+
+@app.post("/api/legends/{ticker}")
+async def trigger_legends(
+    ticker: str, background_tasks: BackgroundTasks,
+    market: str = "US", strategy: str = "펀더멘털 롱숏",
+) -> dict:
+    """5인 분석 실행 (백그라운드) — Sonnet 5회 호출, 완료까지 보통 10~30초."""
+    if strategy not in _LEGEND_STRATEGIES:
+        strategy = "펀더멘털 롱숏"
+    background_tasks.add_task(_bg_legends, ticker.upper(), market.upper(), strategy)
+    return {"status": "queued", "ticker": ticker.upper(), "market": market.upper(), "strategy": strategy}
+
+
+@app.get("/api/legends/{ticker}")
+async def get_legends(ticker: str, market: str = "US") -> dict:
+    """가장 최근에 저장된 5인 분석 결과 (종목당 1건만 보관)."""
+    with _session() as session:
+        row = (
+            session.query(LegendAnalysis)
+            .filter_by(ticker=ticker.upper(), market=market.upper())
+            .first()
+        )
+        if not row:
+            return {"found": False}
+        return {
+            "found": True,
+            "ticker": row.ticker, "market": row.market, "strategy": row.strategy,
+            "votes": json.loads(row.votes_json), "blend": json.loads(row.blend_json),
+            "held": bool(row.held), "created_at": row.created_at.isoformat(),
+        }
 
 
 # ── API 키 설정 ────────────────────────────────────────────────────────────────

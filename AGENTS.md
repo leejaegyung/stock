@@ -90,7 +90,8 @@ app/core/algo_pipeline.py        — LLM-free 알고리즘 분석 엔진 (실제
                                    각 분야 판정 근거(RSI·MACD·P/E·ROE 등 해석 문구)를 리포트의
                                    기술적 지표/펀더멘털 섹션에 그대로 노출(t_notes/f_notes)
 app/db/models.py                 — Watchlist, AnalysisReport, NewsItem, PaperAccount, PaperTrade(모의투자),
-                                   AppSetting(key-value 전역 설정 — 가계부 기준일 등)
+                                   AppSetting(key-value 전역 설정 — 가계부 기준일 등),
+                                   LegendAnalysis(월가 거장 5인 분석, 종목당 최신 1건만 보관)
 app/db/client.py                 — SQLite + WAL 모드
 app/core/datasources/us.py       — yfinance 데이터소스 (US). get_peers(): 섹터별 하드코딩 대형주
                                    최대 5개(_SECTOR_PEERS, 5개 섹터만 커버 — 매핑 안 되면 algo_pipeline의
@@ -113,6 +114,18 @@ app/core/agents/bear.py          — BearResearcher (sonnet)
 app/core/agents/research_manager.py — ResearchManager (sonnet)
 app/core/agents/quant_risk.py    — QuantRisk (sonnet, formulas.py 호출)
 app/core/agents/chief_advisor.py — ChiefAdvisor (opus)
+app/core/agents/legends.py       — LegendAnalyst (sonnet) — 월가 거장 5인(버핏·멍거·그레이엄·
+                                   린치·드러켄밀러) 페르소나. 실존 인물이 아니라 공개된 투자 철학
+                                   기반 AI (virattt/ai-hedge-fund 오픈소스 구조에서 착안, 프롬프트는
+                                   직접 작성). 같은 재무·기술·거시 데이터를 보고 각자 매수/중립/매도 +
+                                   확신도 + 근거를 낸다
+app/core/legends_blend.py        — 5인 표를 전략별 가중치로 합치는 순수 함수 (Layer 1): 딥 밸류(그레이엄
+                                   가중)·펀더멘털 롱숏(버핏·멍거 가중)·인플렉션(린치·드러켄밀러 가중).
+                                   목표 비중 상한 25%, 의견이 갈리면(dispersion) 현금 비중 확대
+app/core/legends_pipeline.py     — 5인 분석 오케스트레이터 (Layer 5): algo_pipeline.py와 같은 데이터
+                                   소스 재사용 → LegendAnalyst 5개 병렬 호출 → legends_blend로 합산.
+                                   DB 저장 없음(호출자 책임). /api/legends/{ticker} GET·POST, 자동
+                                   스케줄 없음 — 비용 있는 LLM 호출(Sonnet×5)이라 사용자가 직접 트리거
 app/core/pipeline.py             — analyze_stock() + morning_brief()
 app/entrypoints/cli.py           — Typer CLI
 app/entrypoints/web.py           — FastAPI + 브리핑 HTML

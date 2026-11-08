@@ -41,7 +41,7 @@ def _layer(path: Path) -> int:
     if parts[0] == "config.py":
         return 0
     if parts[0] == "core" and len(parts) > 1 and parts[1] in (
-        "formulas.py", "quant.py", "market_scan.py", "confidence.py", "trade_plan.py", "signal_perf.py", "universe.py", "chart_patterns.py", "paper_trading.py",
+        "formulas.py", "quant.py", "market_scan.py", "confidence.py", "trade_plan.py", "signal_perf.py", "universe.py", "chart_patterns.py", "paper_trading.py", "legends_blend.py",
     ):
         return 1
     if parts[0] == "db":
@@ -50,7 +50,7 @@ def _layer(path: Path) -> int:
         return 3
     if parts[0] == "core" and len(parts) > 1 and parts[1] == "agents":
         return 4
-    if parts[0] == "core" and parts[-1] == "pipeline.py":
+    if parts[0] == "core" and parts[-1] in ("pipeline.py", "legends_pipeline.py"):
         return 5
     if parts[0] == "entrypoints":
         return 6
@@ -95,7 +95,7 @@ def _module_to_layer(module: str) -> int:
         return 0
     if module in (
         "app.core.formulas", "app.core.quant", "app.core.market_scan", "app.core.confidence",
-        "app.core.trade_plan", "app.core.signal_perf", "app.core.universe", "app.core.chart_patterns", "app.core.paper_trading",
+        "app.core.trade_plan", "app.core.signal_perf", "app.core.universe", "app.core.chart_patterns", "app.core.paper_trading", "app.core.legends_blend",
     ):
         return 1
     if module.startswith("app.db"):
@@ -104,7 +104,7 @@ def _module_to_layer(module: str) -> int:
         return 3
     if module.startswith("app.core.agents"):
         return 4
-    if module in ("app.core.pipeline",):
+    if module in ("app.core.pipeline", "app.core.legends_pipeline"):
         return 5
     if module.startswith("app.entrypoints"):
         return 6

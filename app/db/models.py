@@ -122,6 +122,22 @@ class UserApiKey(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class LegendAnalysis(Base):
+    """월가 거장 5인(버핏·멍거·그레이엄·린치·드러켄밀러) 분석 결과 — 종목당 최신 1건만 보관."""
+    __tablename__ = "legend_analysis"
+    __table_args__ = (UniqueConstraint("ticker", "market"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)
+    strategy = Column(String, nullable=False)        # 딥 밸류 | 펀더멘털 롱숏 | 인플렉션
+    votes_json = Column(Text, nullable=False)          # 5인의 verdict/confidence/reasons
+    blend_json = Column(Text, nullable=False)          # target_weight_pct/cash_pct/consensus 등
+    data_json = Column(Text, default="")                # 5인이 공통으로 본 원시 데이터 (참고용)
+    held = Column(Integer, default=0)                   # 요청 시점 보유 여부(1/0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class AppSetting(Base):
     """앱 전역 설정 (key-value). 현재는 가계부 월급날(payday) 등 소수 항목만 사용."""
     __tablename__ = "app_setting"
