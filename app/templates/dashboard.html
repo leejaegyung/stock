@@ -2521,6 +2521,12 @@ async function loadReportHistory(ticker, market){
 }
 /* ══ 월가 거장 5인 분석 ══════════════════════════════════════════════════ */
 const LEGEND_STRATEGIES = ['펀더멘털 롱숏', '딥 밸류', '인플렉션'];
+// 내부 전략 이름(API·DB에 저장되는 값)은 그대로 두고, 화면에는 쉬운 말로 보여준다
+const LEGEND_STRATEGY_LABELS = {
+  '펀더멘털 롱숏': '우량주 중심 (품질이 좋은 회사 위주)',
+  '딥 밸류': '저평가 중심 (싸게 나온 주식 위주)',
+  '인플렉션': '성장·흐름 중심 (분위기가 바뀌는 주식 위주)',
+};
 const LEGEND_VERDICT_COLOR = { '매수': 'var(--up)', '매도': 'var(--accent-strong)', '중립': 'var(--mute)' };
 let _legendTicker = '', _legendMarket = '';
 
@@ -2528,7 +2534,7 @@ async function showLegends(ticker, market){
   _legendTicker = ticker; _legendMarket = market;
   document.getElementById('modal-hd-info').innerHTML = `
     <div style="font-weight:700;font-size:15px">🏛 월가 거장 5인 — ${esc(ticker)} ${mktChip(market)}</div>
-    <div style="font-size:10.5px;color:var(--mute);margin-top:2px">버핏·멍거·그레이엄·린치·드러켄밀러 (실존 인물이 아닌, 공개된 투자 철학 기반 AI 페르소나) · 실제 자금·투자 권유와 무관</div>`;
+    <div style="font-size:10.5px;color:var(--mute);margin-top:2px">버핏·멍거·그레이엄·린치·드러켄밀러 — 세계적으로 유명한 5명의 투자자라면 어떻게 생각할지 흉내 낸 AI입니다 (실제 그 사람들이 아니에요) · 실제 돈으로 사고팔라는 뜻이 아니라 참고용입니다</div>`;
   document.getElementById('modal-body').innerHTML = `<div style="padding:12px 0"><span class="spin"></span> 불러오는 중…</div>`;
   openModal();
   try {
@@ -2540,7 +2546,7 @@ async function showLegends(ticker, market){
 }
 function renderLegendsResult(d){
   const strategySel = `<select id="legend-strategy" style="height:30px;font-size:12px;border-radius:8px;border:1px solid var(--line-2);background:var(--input);color:var(--ink);padding:0 8px">
-    ${LEGEND_STRATEGIES.map(s => `<option ${d && d.strategy === s ? 'selected' : ''}>${s}</option>`).join('')}
+    ${LEGEND_STRATEGIES.map(s => `<option value="${esc(s)}" ${d && d.strategy === s ? 'selected' : ''}>${esc(LEGEND_STRATEGY_LABELS[s] || s)}</option>`).join('')}
   </select>`;
   const runBtn = `<button class="btn btn-primary btn-sm" id="legend-run-btn" onclick="runLegends()">${d ? '다시 묻기' : '5인에게 물어보기'}</button>`;
   const head = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">${strategySel}${runBtn}
@@ -2548,8 +2554,8 @@ function renderLegendsResult(d){
 
   if (!d){
     document.getElementById('modal-body').innerHTML = head +
-      `<div class="empty"><div class="empty-icon">🏛</div>아직 분석한 적 없는 종목입니다. 전략을 고르고 "5인에게 물어보기"를 눌러보세요.<br>
-      <span style="font-size:11px;color:var(--mute)">규칙 기반 분석 — 비용 없이 1~2초 내 완료됩니다.</span></div>`;
+      `<div class="empty"><div class="empty-icon">🏛</div>아직 분석한 적 없는 종목입니다. 위에서 보고 싶은 방식을 고르고 "5인에게 물어보기"를 눌러보세요.<br>
+      <span style="font-size:11px;color:var(--mute)">돈이 들지 않고, 1~2초 안에 바로 결과가 나옵니다.</span></div>`;
     return;
   }
 
@@ -2570,13 +2576,20 @@ function renderLegendsResult(d){
     </div>`;
   }).join('');
 
+  const dispersionPct = Math.round(b.dispersion * 100);
+  const agreeText = dispersionPct < 20 ? '5명의 생각이 대체로 비슷해요'
+    : dispersionPct < 40 ? '5명의 생각이 어느 정도 갈려요'
+    : '5명의 생각이 많이 갈려서, 그만큼 투자 비율을 줄였어요';
   document.getElementById('modal-body').innerHTML = head + `
     <div class="box" style="margin-bottom:14px">
       <div style="padding:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center">
-        <div><div style="font-size:10.5px;color:var(--mute)">종합 의견</div><div style="font-weight:700;font-size:16px;color:${consCol}">${esc(b.consensus)}</div></div>
-        <div><div style="font-size:10.5px;color:var(--mute)">목표 비중</div><div style="font-weight:700;font-size:16px">${b.target_weight_pct}%</div></div>
-        <div><div style="font-size:10.5px;color:var(--mute)">현금 비중</div><div style="font-weight:700;font-size:16px;color:var(--mute)">${b.cash_pct}%</div></div>
-        <div><div style="font-size:10.5px;color:var(--mute)">의견 대립도</div><div style="font-weight:700;font-size:16px">${Math.round(b.dispersion * 100)}%</div></div>
+        <div><div style="font-size:10.5px;color:var(--mute)">결론</div><div style="font-weight:700;font-size:16px;color:${consCol}">${esc(b.consensus)}</div></div>
+        <div><div style="font-size:10.5px;color:var(--mute)">투자하면 좋은 비율</div><div style="font-weight:700;font-size:16px">${b.target_weight_pct}%</div></div>
+        <div><div style="font-size:10.5px;color:var(--mute)">현금으로 둘 비율</div><div style="font-weight:700;font-size:16px;color:var(--mute)">${b.cash_pct}%</div></div>
+        <div><div style="font-size:10.5px;color:var(--mute)">의견이 갈린 정도</div><div style="font-weight:700;font-size:16px">${dispersionPct}%</div></div>
+      </div>
+      <div style="padding:0 12px 12px;font-size:11.5px;color:var(--sub);line-height:1.6">
+        쉽게 말하면: 가진 돈이 100만원이라면 그중 <b>${b.target_weight_pct}만원</b> 정도는 이 종목에 넣고, 나머지 <b>${b.cash_pct}만원</b>은 현금으로 남겨두는 게 좋다는 뜻이에요. ${agreeText} (0%면 5명 생각이 똑같다는 뜻, 100%면 정반대로 완전히 갈렸다는 뜻).
       </div>
       ${(b.notes && b.notes.length) ? `<div style="padding:0 12px 12px;font-size:11px;color:var(--sub)">${b.notes.map(esc).join('<br>')}</div>` : ''}
     </div>
